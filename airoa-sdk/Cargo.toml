@@ -1,0 +1,37 @@
+[package]
+name = "airoa-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Host boundary to airoa_core, run as a WebAssembly component under wasmtime"
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/airoa-org/yubi-go"
+
+[lib]
+name = "airoa_sdk"
+
+[features]
+all-arch = ["wasmtime/all-arch"]
+
+# Built only by `cargo build-cwasm`, which turns the feature on. It needs
+# Cranelift, which the Android build leaves out, so a workspace-wide Android
+# check would otherwise fail on it.
+[[bin]]
+name = "build_cwasm_from_airoa_data_collection"
+required-features = ["all-arch"]
+
+[dependencies]
+log = "0.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+wasmtime = { version = "48", default-features = false, features = ["runtime", "std", "component-model"] }
+wasmtime-wasi = { version = "48", default-features = false, features = ["p2"] }
+wasmtime-wasi-http = { version = "48", default-features = false, features = ["p2", "default-send-request"] }
+
+# The device deserializes a cwasm built here, so it needs no compiler: keeping
+# Cranelift off the Android build drops the codegen backends from the .so.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+wasmtime = { version = "48", default-features = false, features = ["cranelift"] }
+
+[dev-dependencies]
+tiny_http = "0.12"

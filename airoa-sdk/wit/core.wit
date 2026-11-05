@@ -1,0 +1,16 @@
+package airoa:core@0.1.0;
+
+interface recorder {
+    // TaskContext and HostAdapter payloads belong to upstream airoa_core.
+    // Keep their JSON schema there; WIT owns the call and error boundary.
+    invoke: func(request: string) -> result<string, string>;
+}
+
+world core {
+    import recorder;
+    variant failure {
+        refused(string),
+        python(string),
+    }
+    export dispatch: func(operation: string, arguments: string) -> result<string, failure>;
+}

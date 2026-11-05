@@ -1,0 +1,112 @@
+id	en
+ready	Ready to record.
+task_is	Task is
+not_ready	Not ready.
+recording	Recording. All good.
+recording.cancelled	Recording cancelled.
+recording.stopped	Recording stopped.
+marked_failed	Marked failed. Reset, then double-click to retry.
+marked_failed.ended	Marked failed.
+subtask.warning	Thirty seconds left.
+hub.silent	No cameras or sensors. Check the hub.
+left_cam.silent	Left camera: no data.
+left_cam.stalled	Left camera stalled. Replug the hub.
+left_cam.starved	Left camera frame rate too low.
+right_cam.silent	Right camera: no data.
+right_cam.stalled	Right camera stalled. Replug the hub.
+right_cam.starved	Right camera frame rate too low.
+head_cam.silent	Head camera: no data.
+head_cam.stalled	Head camera stalled. Replug the hub.
+head_cam.starved	Head camera frame rate too low.
+left_gripper_sensor.silent	Left gripper sensor: no data.
+left_gripper_sensor.starved	Left gripper sensor rate too low.
+right_gripper_sensor.silent	Right gripper sensor: no data.
+right_gripper_sensor.starved	Right gripper sensor rate too low.
+grippers.uncalibrated	Grippers need calibration.
+left_controller.starved	Left controller rate too low.
+left_controller.untracked	Left controller out of view.
+left_controller.lost	Left controller lost. Wake it or check its battery.
+right_controller.starved	Right controller rate too low.
+right_controller.untracked	Right controller out of view.
+right_controller.lost	Right controller lost. Wake it or check its battery.
+headset.starved	Headset rate too low.
+headset.untracked	Headset tracking is weak. Add light.
+headset.lost	Headset tracking lost.
+task.none	No task assigned.
+storage.low	Disk too full.
+battery.low	Battery too low.
+gate.settling	Settling. Hold the rig still.
+gate.core_down	Recording core not running.
+subtask.overrun	Subtask over two minutes.
+calib.squeeze	Calibration. Close both grippers fully.
+calib.release	Now open both fully and hold still.
+calib.done	Calibration done.
+calib.cancelled	Calibration cancelled.
+calib.left_barely	Left gripper barely moved. Press Y to try again.
+calib.right_barely	Right gripper barely moved. Press Y to try again.
+calib.left_wrapped	Left gripper turned too far. Press Y to try again.
+calib.right_wrapped	Right gripper turned too far. Press Y to try again.
+cams.done	Cameras assigned.
+cameras.unmatched	Cameras not matched yet. Turn one gripper around for a few seconds.
+battery.unknown	Battery level unknown.
+battery.pct.0	Battery zero percent.
+battery.pct.5	Battery five percent.
+battery.pct.10	Battery ten percent.
+battery.pct.15	Battery fifteen percent.
+battery.pct.20	Battery twenty percent.
+battery.pct.25	Battery twenty-five percent.
+battery.pct.30	Battery thirty percent.
+battery.pct.35	Battery thirty-five percent.
+battery.pct.40	Battery forty percent.
+battery.pct.45	Battery forty-five percent.
+battery.pct.50	Battery fifty percent.
+battery.pct.55	Battery fifty-five percent.
+battery.pct.60	Battery sixty percent.
+battery.pct.65	Battery sixty-five percent.
+battery.pct.70	Battery seventy percent.
+battery.pct.75	Battery seventy-five percent.
+battery.pct.80	Battery eighty percent.
+battery.pct.85	Battery eighty-five percent.
+battery.pct.90	Battery ninety percent.
+battery.pct.95	Battery ninety-five percent.
+battery.pct.100	Battery one hundred percent.
+battery.charging	Charging.
+battery.plugged_not_charging	Plugged in, but not charging.
+battery.not_charging	Not charging.
+battery.left.under	Under fifteen minutes left.
+battery.left.15	About fifteen minutes left.
+battery.left.30	About thirty minutes left.
+battery.left.45	About forty-five minutes left.
+battery.left.60	About one hour left.
+battery.left.75	About one hour fifteen minutes left.
+battery.left.90	About one hour thirty minutes left.
+battery.left.105	About one hour forty-five minutes left.
+battery.left.120	About two hours left.
+battery.left.135	About two hours fifteen minutes left.
+battery.left.150	About two hours thirty minutes left.
+battery.left.165	About two hours forty-five minutes left.
+battery.left.180	About three hours left.
+battery.left.over	Over three hours left.
+battery.left.unknown	Time left not known yet.
+power.connected	Charger connected.
+power.disconnected	Charger disconnected.
+power.unstable	Power keeps dropping. Use a stronger charger.
+battery.low_15	Battery low. About fifteen minutes left.
+battery.low_5	Battery almost empty. About five minutes left.
+storage.low_15	Disk almost full. About fifteen minutes of recording left.
+storage.low_5	Disk almost full. About five minutes of recording left.
+digit.0	zero
+digit.1	one
+digit.2	two
+digit.3	three
+digit.4	four
+digit.5	five
+digit.6	six
+digit.7	seven
+digit.8	eight
+digit.9	nine
+dot	dot
+colon	colon
+address.none	No network address.
+left_cam.moving	Left camera is moving.
+right_cam.moving	Right camera is moving.

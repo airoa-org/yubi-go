@@ -1,0 +1,26 @@
+/target
+*.apk
+*.keystore
+*.mjpeg
+.DS_Store
+captures/
+episodes/
+*.log
+logs/
+
+# Rerun recordings, such as the ones assets/web/rerun_view.py writes
+*.rrd
+__pycache__/
+
+# Payload build products: `cargo build-cwasm` regenerates everything here from
+# the commits pinned in PAYLOAD. The component and its stamp are tracked, because
+# rebuilding them needs the private airoa_data_collection
+/airoa-sdk/build/*
+!/airoa-sdk/build/PAYLOAD
+!/airoa-sdk/build/airoa-core.wasm
+!/airoa-sdk/build/airoa-core.wasm.src
+/airoa-sdk/wit/deps/
+/airoa-sdk/.venv/
+
+# Agent worktrees
+.claude/

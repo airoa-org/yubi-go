@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Most of a cold run is the release build of airoa-sdk with all-arch
+      # (wasmtime + cranelift). Cache the workspace target dir so reruns skip it.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target"
+
+      # `cargo build-cwasm` compiles the committed component, and rebuilds the
+      # component from the upstream commits pinned in PAYLOAD (~30 s) only when
+      # its sources changed. airoa_data_collection is private: AIROA_CORE_TOKEN
+      # is a fine-grained PAT with read access, so a fetch failing with
+      # 401/403 means it has expired.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      # A cache hit leaves `cargo build-cwasm` to find its stamp current and
+      # skip. The key is what the stamp hashes — the pins, our adapters, and the
+      # builder with its wasmtime — plus this runner's CPU features: a host
+      # cwasm uses every feature of the CPU that built it, and the runner pool
+      # mixes CPUs (one with AVX-VNNI made a cwasm the next could not load).
+      - id: cpu
+        run: echo "flags=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - id: cwasm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            airoa-sdk/build/airoa-core.cwasm
+            airoa-sdk/build/airoa-core.cwasm.src
+          key: cwasm-${{ steps.cpu.outputs.flags }}-${{ hashFiles('airoa-sdk/build/PAYLOAD', 'airoa-sdk/uv.lock', 'airoa-sdk/python/**', 'airoa-sdk/wit/*.wit', 'airoa-sdk/wkg.lock', 'airoa-sdk/src/**', 'Cargo.lock') }}
+      - if: steps.cwasm.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/bin
+          curl -fsSL -o ~/.local/bin/wkg https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/v0.16.1/wkg-x86_64-unknown-linux-gnu
+          echo "235ecf455e11b8b146e00f24f24c95b573cfe6a432f332358463b229311cec57  $HOME/.local/bin/wkg" | sha256sum -c -
+          chmod +x ~/.local/bin/wkg
+          echo ~/.local/bin >> "$GITHUB_PATH"
+      # `cargo build-cwasm` compiles and runs this checkout's airoa-sdk, so it
+      # runs without the token. This step, which runs git alone, fetches the
+      # pinned airoa_data_collection commit into a bare repo outside the
+      # checkout. The token reaches git through this step's environment only.
+      # A fork gets no secrets, so it skips the fetch and fails below only when
+      # the component has to be rebuilt.
+      - if: steps.cwasm.outputs.cache-hit != 'true'
+        env:
+          TOKEN: ${{ secrets.AIROA_CORE_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || exit 0
+          # PAYLOAD comes from the PR, so only a bare commit id reaches git.
+          commit=$(grep -oxE 'airoa_core_commit=[0-9a-f]{40}' airoa-sdk/build/PAYLOAD | cut -d= -f2)
+          git init -q --bare "$RUNNER_TEMP/airoa_data_collection.git"
+          git -C "$RUNNER_TEMP/airoa_data_collection.git" fetch -q --depth 1 \
+            "https://x-access-token:$TOKEN@github.com/airoa-org/airoa_data_collection.git" "$commit"
+      # On a hit the builder has nothing to do, and building it alone is 30 s
+      # of release compile, so it is not even built. Its fetch of
+      # airoa_data_collection reads the bare repo above.
+      - if: steps.cwasm.outputs.cache-hit != 'true'
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: url.file://${{ runner.temp }}/airoa_data_collection.git.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/airoa-org/airoa_data_collection.git
+        run: cargo build-cwasm
+      - run: cargo test --workspace --locked --no-fail-fast
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # Code under `#[cfg(target_os = "android")]` (the XR view, USB capture,
+  # `app`) never compiles in the host jobs above.
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: |
+          rustup target add aarch64-linux-android
+          cargo install cargo-ndk --locked
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - run: cargo ndk -t arm64-v8a -P 29 clippy -p yubi-go --all-targets --locked -- -D warnings
