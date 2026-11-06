@@ -1,0 +1,149 @@
+YUBI Go
+Copyright 2026 AI Robot Association (AIRoA)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes or is built with the third-party material below. Each item keeps
+its own licence. "In the APK" means android/build.sh packs the item into the
+app; such items are fetched or built at build time and are not in this
+repository, except airoa-sdk/build/airoa-core.wasm, which is committed.
+The APK carries LICENSES.txt, the full licence text of every item below and of
+every Rust crate compiled into it (tools/licenses/bundle.sh). The headset
+serves it at http://<headset>:8080/licenses.
+
+Meta, Meta Quest, Meta Horizon and Horizon OS are trademarks of Meta Platforms,
+Inc. YUBI Go uses the names only to identify the device it runs on. It is not
+made, endorsed or sponsored by Meta.
+
+YUBI Go is based on the YUBI open-source hardware project
+(https://github.com/Toyota/yubi-hw, CERN-OHL-W-2.0; arXiv:2606.10244).
+YUBI Go is developed by AIRoA. Toyota Motor Corporation does not endorse or
+certify this product.
+
+--------------------------------------------------------------------------------
+airoa_core
+  Files:   airoa-sdk/build/airoa-core.wasm and airoa-core.cwasm in the APK,
+           compiled from airoa_core (commit in airoa-sdk/build/PAYLOAD)
+  Source:  https://github.com/airoa-org/airoa_data_collection (private)
+  Licence: Apache-2.0, Copyright AI Robot Association (AIRoA)
+
+Kokoro-82M text-to-speech model and voices
+  Files:   model.onnx (model_quantized.onnx) and voice af_heart
+           (in the APK, fetched by tools/tts/fetch.sh); the clips in
+           assets/voice/**/*.wav, generated with them by tools/voice/generate.py;
+           tts/src/tables.rs, which carries the model's phoneme vocabulary
+  Source:  https://huggingface.co/hexgrad/Kokoro-82M
+           https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX
+           (revision 1939ad2a8e416c0acfeecc08a694d14ef25f2231)
+  Licence: Apache-2.0
+  Training data: the model card lists this CC BY audio among the data used
+           to train Kokoro v1.0:
+           Koniwa (https://github.com/koniwa/koniwa), CC BY 3.0
+           SIWIS (https://datashare.ed.ac.uk/handle/10283/2353), CC BY 4.0
+
+misaki 0.9.4 (grapheme-to-phoneme)
+  Files:   tts/src/en_gold.tsv and tts/src/en_silver.tsv (generated from
+           misaki's data by tools/tts/); tts/tests/misaki_en.tsv (misaki's
+           output); tts::en is a Rust port of misaki's G2P
+  Source:  https://github.com/hexgrad/misaki
+  Licence: Apache-2.0
+  Provenance: upstream does not document the sources of the gold
+           dictionary. The silver dictionary is espeak-ng (GPL-3.0) output
+           over dwyl/english-words (hexgrad/misaki#51). The voice clips and
+           tts/tests/misaki_en.tsv were generated with espeak-ng installed as
+           misaki's fallback. We keep misaki's Apache-2.0 label and record
+           this provenance here.
+
+spaCy (English tokenizer rules)
+  Files:   tts/src/en/tokens.rs, which follows the prefix, suffix and
+           contraction rules of spaCy's English tokenizer
+  Source:  https://github.com/explosion/spaCy
+  Licence: MIT, Copyright (C) 2016-2024 ExplosionAI GmbH, 2016 spaCy GmbH,
+           2015 Matthew Honnibal
+
+ONNX Runtime 1.31.1
+  Files:   libonnxruntime.so in the APK (from the onnxruntime-android AAR on
+           Maven Central, fetched by tools/tts/fetch.sh)
+  Source:  https://github.com/microsoft/onnxruntime
+  Licence: MIT, Copyright (c) Microsoft Corporation; its third-party
+           notices (tools/licenses/onnxruntime-1.31.1-ThirdPartyNotices.txt)
+           are in LICENSES.txt. It contains Eigen, part of it under MPL-2.0;
+           Eigen's source is at https://gitlab.com/libeigen/eigen
+
+Python runtime in the airoa_core payload
+  Files:   airoa-core.cwasm in the APK (built by `cargo build-cwasm`), which
+           embeds the following:
+           CPython 3.14.0, through componentize-py 0.25.0: PSF-2.0
+             (tools/licenses/cpython-3.14.0.txt), and the libraries it
+             bundles (tools/licenses/cpython-3.14.0-bundled.txt):
+             expat 2.7.3 (MIT), HACL* (MIT), libmpdec (BSD-2-Clause),
+             mimalloc (MIT), zlib 1.3.1 (Zlib) and the Zstandard bindings
+             from pyzstd (BSD-3-Clause)
+           wasi-libc (wasi-sdk 33), through componentize-py: Apache-2.0 WITH
+             LLVM-exception, with musl under MIT
+             (tools/licenses/wasi-libc-musl-COPYRIGHT.txt) and cloudlibc
+             under BSD-2-Clause (tools/licenses/wasi-libc-cloudlibc-LICENSE.txt)
+           componentize-py 0.25.0: Apache-2.0 WITH LLVM-exception, and the
+             Rust crates its runtime links, such as pyo3: MIT or Apache-2.0
+             (tools/licenses/componentize-py-0.25.0-runtime-crates.txt)
+           attrs 23.2.0, jsonschema 4.17.3, pyrsistent 0.20.0, PyYAML 6.0.2:
+             MIT; pyrsistent vendors code from toolz under BSD-3-Clause,
+             Copyright (c) 2013 Matthew Rocklin
+             (tools/licenses/pyrsistent-0.20.0-toolz.txt)
+           airoa-metadata (airoa-sdk/build/PAYLOAD): Apache-2.0
+  Source:  https://github.com/python/cpython
+           https://github.com/bytecodealliance/componentize-py
+           https://github.com/WebAssembly/wasi-libc
+           each package on PyPI
+
+Noto Sans Mono 2.006 and Noto Sans CJK JP 2.004 (subsets)
+  Files:   assets/fonts/NotoSansMono-ascii.ttf, assets/fonts/NotoSansCJKjp-cp932.otf
+  Source:  https://github.com/notofonts/noto-fonts
+           https://github.com/notofonts/noto-cjk
+  Licence: SIL Open Font License 1.1; copyright lines and the full licence
+           are in assets/fonts/LICENSE-OFL.txt
+
+Khronos OpenXR loader 1.1.62
+  Files:   android/jniLibs/arm64-v8a/libopenxr_loader.so (identical to the
+           arm64-v8a library in org.khronos.openxr:openxr_loader_for_android
+           1.1.62 on Maven Central)
+  Source:  https://github.com/KhronosGroup/OpenXR-SDK-Source
+  Licence: Apache-2.0, Copyright The Khronos Group Inc.; it statically
+           contains jsoncpp, MIT, Copyright Baptiste Lepilleur and The JsonCpp
+           Authors (tools/licenses/jsoncpp-openxr-1.1.62.txt)
+
+Meta Quest Touch Plus controller geometry
+  Files:   assets/meshes/quest/left.stl, assets/meshes/quest/right.stl
+           (converted from the meta-quest-touch-plus profile's left.glb and
+           right.glb, and re-registered onto the runtime grip pose)
+  Source:  https://github.com/immersive-web/webxr-input-profiles
+           (packages/assets)
+  Licence: MIT, Copyright (c) 2019 Amazon
+           (tools/licenses/webxr-input-profiles-assets.txt). The asset licence
+           grants no right to the device maker's trademarks.
+
+YUBI hand description
+  Files:   assets/yubi.urdf (expanded from yubi_description/urdf/
+           yubi_hand.urdf.xacro), assets/meshes/yubi/*
+  Source:  https://github.com/airoa-org/yubi-sw
+  Licence: Apache-2.0
+
+ROS 2 and Foxglove message definitions
+  Files:   assets/msg/*/*.msg except assets/msg/yubi_go_msgs/ (per-file sources
+           in assets/msg/README.md)
+  Source:  https://github.com/ros2/common_interfaces,
+           https://github.com/ros2/rcl_interfaces (branch jazzy): Apache-2.0
+           https://github.com/ros2/geometry2 (assets/msg/tf2_msgs/):
+           BSD-3-Clause, Copyright (c) 2008 Willow Garage, Inc.
+           (tools/licenses/ros2-geometry2-LICENSE.txt)
+           https://github.com/foxglove/foxglove-sdk
+           (assets/msg/foxglove_msgs/CompressedVideo.msg): MIT
+
+Rust standard library
+  Files:   statically linked into libyubi_go.so in the APK and into yubi-export
+  Source:  https://github.com/rust-lang/rust
+  Licence: MIT OR Apache-2.0, Copyright The Rust Project Developers
+           (tools/licenses/rust-std-1.99.1.txt)
+
+Rust crate dependencies are listed in Cargo.lock; each crate carries its own
+licence, and the Rust crates section of LICENSES.txt holds every licence text.

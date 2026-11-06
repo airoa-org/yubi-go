@@ -1,0 +1,2 @@
+[alias]
+build-cwasm = "run --locked --profile tool -p airoa-sdk --features all-arch --bin build_cwasm_from_airoa_data_collection --"

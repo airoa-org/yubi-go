@@ -1,0 +1,58 @@
+cff-version: 1.2.0
+message: "If you use YUBI Go, please cite it as below."
+title: "YUBI Go"
+type: software
+authors:
+  - name: "AI Robot Association (AIRoA)"
+    email: ext-oss@airoa.org
+license: Apache-2.0
+repository-code: "https://github.com/airoa-org/yubi-go"
+version: 0.1.0
+date-released: 2026-11-06
+references:
+  - type: article
+    title: "YUBI: Yielding Universal Bidigital Interface for Bimanual Dexterous Manipulation at Scale"
+    authors:
+      - family-names: Ohkawa
+        given-names: Takehiko
+      - family-names: Arima
+        given-names: Jumpei
+      - family-names: Noguchi
+        given-names: Yuki
+      - family-names: Tateno
+        given-names: Masatoshi
+      - family-names: Sugiura
+        given-names: Makoto
+      - family-names: Okubo
+        given-names: Takuya
+      - family-names: Ikeuchi
+        given-names: Kengo
+      - family-names: Shin
+        given-names: Yuma
+      - family-names: Nishizawa
+        given-names: Hiroki
+      - family-names: Kanazawa
+        given-names: Naoaki
+      - family-names: Wakayama
+        given-names: Yuki
+      - family-names: Fukunaga
+        given-names: Daiki
+      - family-names: Makihara
+        given-names: Koshi
+      - family-names: Motoda
+        given-names: Tomohiro
+      - family-names: Erich
+        given-names: Floris
+      - family-names: Domae
+        given-names: Yukiyasu
+      - family-names: Matsushima
+        given-names: Tatsuya
+      - family-names: Okumatsu
+        given-names: Yoshihiro
+      - family-names: Ota
+        given-names: Kei
+    year: 2026
+    identifiers:
+      - type: other
+        value: "arXiv:2606.10244"
+    url: "https://arxiv.org/abs/2606.10244"

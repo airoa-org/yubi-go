@@ -1,0 +1,20 @@
+# What `cargo about` may accept, and for which build: the headset library, the
+# only Rust code the APK carries.
+accepted = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unlicense",
+  "0BSD",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+]
+targets = ["aarch64-linux-android"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

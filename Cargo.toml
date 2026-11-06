@@ -1,0 +1,77 @@
+[package]
+name = "yubi-go"
+version = "0.1.0"
+edition = "2021"
+# wasmtime 48 needs 1.95.
+rust-version = "1.95"
+description = "Quest 3 app that records YUBI Gloves and their wrist and head cameras"
+authors = ["AI Robot Association (AIRoA) <ext-oss@airoa.org>"]
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/airoa-org/yubi-go"
+
+[workspace]
+members = [".", "airoa-sdk", "reactive-svg", "tts", "yubi-export"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+airoa-sdk = { path = "airoa-sdk" }
+# The panel's renderer. resvg also shapes Japanese text, which a baked glyph
+# atlas cannot cover: a task name is whatever an operator typed.
+reactive-svg = { path = "reactive-svg" }
+tts = { path = "tts" }
+anyhow = "1.0.104"
+glam = "0.33.3"
+libc = "0.2"
+log = "0.4"
+mdns-sd = { version = "0.21.4", default-features = false }
+# `default-features = false` drops the zstd and lz4 C libraries: episode
+# chunks are written uncompressed (see `record::mcap`), so the only thing
+# linking them would buy is two more cross-compilers the NDK build needs.
+mcap = { version = "0.25.0", default-features = false }
+nusb = "0.2"
+# The LeRobot export's data files. Without arrow: the column writer alone
+# writes the flat and list columns a dataset has, at a fraction of the build.
+# Snappy is pure Rust, where the zstd and lz4 codecs would need C cross-compiled.
+parquet = { version = "60.0.0", default-features = false, features = ["snap"] }
+# SigV4 for the presigned PUTs `record::upload` sends straight at the bucket.
+# Signing v4 by hand is four canonicalization rules and an HMAC chain, and a
+# signature that is wrong is a 403 with no hint which rule was missed.
+rusty-s3 = "0.10.2"
+qrcodegen = "1.8"
+# For the derive. serde and serde_derive already come in through rusty-s3, so
+# this adds no crate.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tungstenite = "0.30.0"
+# Native S3 uploads use blocking HTTP with rustls and bundled CA roots.
+# Backend API requests use WASI HTTP inside airoa-sdk.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+# rusty-s3 signs into a `url::Url` and hands one back, so this is already in
+# the graph; `record::upload` parses the configured endpoint with the same parser that
+# will sign against it, rather than a second opinion about what a URL is.
+url = "2"
+zune-jpeg = { version = "0.5.15", default-features = false }
+cdr = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.15"
+jni = "0.22"
+ndk-context = "0.1"
+openxr = "0.21"
+
+[build-dependencies]
+roxmltree = "0.21"
+
+[profile.release]
+lto = true
+strip = true
+
+# `cargo build-cwasm` never ships, and fat LTO over wasmtime + all-arch
+# Cranelift is a single-threaded link that took ~7 minutes on its own.
+[profile.tool]
+inherits = "release"
+lto = false

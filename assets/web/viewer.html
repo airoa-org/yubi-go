@@ -1,0 +1,2110 @@
+<!doctype html>
+<!--
+  The episode viewer, served by the headset at `/viewer`.
+
+  Self-contained for the reason `page.html` is: the rig network often has no
+  internet, so a CDN reference is a blank page. The 3D view is plain WebGL for
+  the same reason. A scene of seven posed meshes and three trails needs no
+  library.
+
+  Everything comes from the take on the headset (`/episodes/<name>/view`, see
+  `record::playback`), so a take can be checked before anyone copies it.
+
+  **Live** draws what the headset sees now with the same scene, plot and
+  layout: the poses arrive as server-sent events (`/live/poses`) in the
+  recorded tracks' own shape, and the cameras as MJPEG (`/live/<camera>.mjpeg`).
+  The headset caps both at 10 Hz while a take records, and the page drops
+  them whenever it is not visible.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YUBI Go episodes</title>
+<style>
+  :root {
+    --bg: #14161a; --card: #1d2026; --line: #2c313a; --scene: #0d0f12;
+    --fg: #e6e8ec; --dim: #98a0ae; --accent: #57c7a0; --alert: #e2685f;
+    --warn: #e0a830; --play: #5aa9ff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  /* Any rule that sets `display` beats the UA's `[hidden]`, so without this a
+     hidden note with `display: flex` covers the 3D view and eats every click. */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); font-size: 14px; line-height: 1.45;
+    display: grid; grid-template-columns: var(--side, 290px) 1fr; overflow: hidden;
+  }
+  .dim { color: var(--dim); }
+  .bad { color: var(--alert); }
+  a { color: var(--dim); }
+  button, select, input {
+    font: inherit; background: var(--card); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; min-height: 36px;
+  }
+  button { cursor: pointer; }
+  button:active { border-color: var(--accent); }
+  button.quiet { background: none; border: 0; color: var(--dim); text-decoration: underline; padding: 6px 4px; }
+  button.danger:active { border-color: var(--alert); color: var(--alert); }
+
+  /* --- the sidebar ------------------------------------------------------ */
+  aside {
+    border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0;
+    position: relative;
+  }
+  /* Dragged to widen the list, so long labels show in full. */
+  #side-resize {
+    position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 3; cursor: col-resize;
+  }
+  #side-resize:hover, #side-resize.dragging { background: var(--line); }
+  .side-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 10px 8px 14px; }
+  .side-head h1 { font-size: 14px; margin: 0; letter-spacing: .04em; }
+  #missing { margin: 0; padding: 0 14px 8px; color: var(--warn); font-size: 12px; }
+  #list { flex: 1; overflow-y: auto; min-height: 0; }
+  .item {
+    display: block; width: 100%; text-align: left; border: 0; border-radius: 0;
+    border-top: 1px solid var(--line); background: none; padding: 7px 14px 7px 8px; min-height: 0;
+  }
+  #live-item, #exports-item { padding-left: 14px; }
+  .item .l { display: flex; justify-content: space-between; gap: 8px; }
+  .item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .l .dim { flex: none; font-size: 12px; }
+  .item[aria-current="true"] { background: var(--card); box-shadow: inset 3px 0 0 var(--accent); }
+  .row { display: flex; align-items: center; border-top: 1px solid var(--line); }
+  .row:hover { background: var(--card); }
+  /* The open episode is marked on the row's edge, outside its checkbox. */
+  .row:has(.item[aria-current="true"]) { background: var(--card); box-shadow: inset 3px 0 0 var(--accent); }
+  .row .item[aria-current="true"] { background: none; box-shadow: none; }
+  /* Checkboxes show on hover, and stay while anything is picked. A touch
+     screen has no hover, so there they always show. */
+  .row input[type=checkbox] { opacity: 0; transition: opacity .1s; }
+  .row:hover input[type=checkbox], .row input[type=checkbox]:focus-visible,
+  #list.picking .row input[type=checkbox] { opacity: 1; }
+  @media (hover: none) { .row input[type=checkbox] { opacity: 1; } }
+  /* Select-all sits over the rows' own checkboxes, in the same column. */
+  .list-head {
+    display: flex; align-items: center; gap: 8px; padding: 6px 14px 6px 10px;
+    border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; cursor: pointer;
+  }
+  .list-head input { flex: none; min-height: 0; margin: 0; accent-color: var(--accent); }
+  .row input[type=checkbox] { flex: none; min-height: 0; margin: 0 0 0 4px; accent-color: var(--accent); }
+  .row .item, .row .dir { border-top: 0; flex: 1; min-width: 0; }
+  .dir {
+    display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 0; border-radius: 0;
+    background: none; padding: 7px 14px 7px 8px; min-height: 0; color: var(--fg);
+  }
+  .dir .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #picked { border-top: 1px solid var(--line); padding: 8px 14px; background: var(--card); }
+  #picked .l { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  #picked-n { flex: 1; }
+  #picked .actions { gap: 6px; margin-top: 6px; }
+  #picked button { min-height: 30px; padding: 4px 10px; font-size: 13px; white-space: nowrap; }
+  #picked button.quiet { padding: 0; min-height: 0; }
+  #job { margin: 8px 0; font-size: 13px; }
+  #job progress { display: block; width: 100%; height: 10px; margin: 6px 0 4px; accent-color: var(--accent); }
+  .export { border-top: 1px solid var(--line); padding: 10px 0; font-size: 13px; }
+  .export .actions { gap: 12px; margin-top: 4px; }
+  .export summary { cursor: pointer; color: var(--dim); margin-top: 4px; }
+  .side-foot { border-top: 1px solid var(--line); padding: 4px 10px; font-size: 12px; }
+  #export-dlg, #pull-dlg {
+    max-width: 560px; width: calc(100vw - 32px); padding: 16px 18px; font-size: 13px;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+  }
+  #export-dlg::backdrop, #pull-dlg::backdrop { background: rgba(0, 0, 0, .6); }
+  #pull-dlg p { margin: 8px 0 0; }
+  #export-dlg .head, #pull-dlg .head { display: flex; justify-content: space-between; align-items: center; }
+  #export-dlg label { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; }
+  #export-dlg label input { flex: 1; min-height: 32px; }
+  #export-dlg label input[type=checkbox] { flex: none; min-height: 0; margin: 0; accent-color: var(--accent); }
+  #export-dlg section { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+  #export-dlg h3 { font-size: 13px; margin: 0; }
+  #export-dlg p { margin: 4px 0 0; }
+  #export-dlg section button { margin-top: 8px; }
+  pre {
+    margin: 8px 0 0; padding: 8px 10px; font: inherit; font-size: 12px;
+    white-space: pre-wrap; word-break: break-all; user-select: all;
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  }
+
+  /* --- the episode ------------------------------------------------------ */
+  main { overflow-y: auto; min-height: 0; padding: 14px 16px 24px; }
+  #empty { padding: 40px 0; text-align: center; }
+  .spin::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -2px; border: 2px solid rgb(255 255 255 / .25); border-top-color: currentColor; border-radius: 50%; animation: spin .8s linear infinite; }
+  .page { max-width: 960px; }
+  .page .big { font-size: 18px; }
+  .page > p { margin: 8px 0 12px; }
+  .ep-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .ep-head .big { font-size: 18px; }
+  .actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .actions label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+  .actions input { min-height: 0; margin: 0; }
+  /* Each tile grows by its picture's aspect, so a stereo head camera beside
+     two 4:3 wrists fills one row at one height. */
+  .cams { display: flex; gap: 10px; padding: 12px 0 10px; justify-content: center; }
+  /* No taller than a three-camera row of 4:3 tiles in a 1100 px pane, so two
+     cameras do not take the 3D view's height. */
+  .cams figure { margin: 0; flex: 1.333 1 0; min-width: 0; max-width: calc(var(--aspect, 1.333) * 25vh); }
+  .cams .frame { position: relative; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; overflow: hidden; }
+  .cams .frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .7; }
+  .cams img, .cams video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .cams figcaption { color: var(--dim); font-size: 12px; padding-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Over the last picture, so a tile that waits reads differently from one that froze. */
+  .cams .frame.loading::after { content: attr(data-loading); position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; padding-top: 44px; background: rgb(0 0 0 / .55); color: #ddd; font-size: 12px; }
+  .cams .frame.loading::before { content: ""; position: absolute; left: 50%; top: 50%; z-index: 2; width: 22px; height: 22px; margin: -22px 0 0 -13px; border: 2px solid rgb(255 255 255 / .25); border-top-color: #ddd; border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(1turn); } }
+  .scene { position: relative; height: clamp(300px, 48vh, 640px); background: var(--scene); border-radius: 8px; overflow: hidden; touch-action: none; }
+  .scene canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+  .scene canvas:active { cursor: grabbing; }
+  .scene .tools { position: absolute; top: 8px; right: 10px; display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--dim); }
+  .scene .tools input { min-height: 0; padding: 0; margin: 0 4px 0 0; vertical-align: middle; }
+  .scene .tools label { display: flex; align-items: center; }
+  .scene .hint { position: absolute; bottom: 6px; left: 10px; font-size: 11px; color: var(--dim); pointer-events: none; }
+  #gl-note { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  .rec { color: #e63c3c; }
+  .transport { display: flex; gap: 10px; align-items: center; padding: 12px 0 6px; }
+  #play { min-width: 44px; padding: 6px 10px; }
+  #speed { padding: 6px 4px; }
+  .plot { position: relative; height: 110px; touch-action: none; cursor: crosshair; }
+  .plot canvas { width: 100%; height: 100%; display: block; }
+  .plot i { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--play); pointer-events: none; }
+  .legend { display: flex; gap: 14px; font-size: 12px; padding-top: 4px; flex-wrap: wrap; }
+  .left { color: var(--accent); } .right { color: var(--warn); }
+
+  /* An episode and the live view fit the window: the 3D view takes the
+     height the cameras, the transport and the gripper plot leave. */
+  @media (min-width: 801px) {
+    main { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 12px; }
+    main #ep { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    main .cams, main .transport, main .legend { flex: none; }
+    main .scene { flex: 1; height: auto; min-height: 120px; }
+    main .plot { flex: none; height: 80px; }
+    main .page { flex: 1; min-height: 0; overflow-y: auto; }
+  }
+
+  /* A phone: the list folds above the episode instead of beside it. */
+  @media (max-width: 800px) {
+    body { display: block; overflow: auto; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+    #side-resize { display: none; }
+    #list { max-height: 32vh; }
+    main { overflow: visible; }
+    .cams { flex-wrap: wrap; }
+    .cams figure { flex-basis: 40%; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div class="side-head">
+    <h1><a href="/">YUBI Go</a> · <span>Viewer</span></h1>
+  </div>
+  <p id="missing" hidden></p>
+  <button class="item" id="live-item" data-name="live" title="what the headset sees now">
+    <div class="l"><span class="name">● <span>Live</span></span><span class="dim" id="live-state"></span></div>
+  </button>
+  <button class="item" id="exports-item" data-name="exports">
+    <div class="l"><span class="name">⇩ <span>LeRobot exports</span></span><span class="dim" id="exports-n"></span></div>
+  </button>
+  <label class="list-head"><input type="checkbox" id="pick-all"><span>select all</span><span id="count"></span></label>
+  <div id="list"></div>
+  <div id="picked" hidden>
+    <div class="l"><span id="picked-n"></span><button class="quiet" id="pick-clear">clear</button></div>
+    <div class="actions">
+      <button id="pick-export">export LeRobot</button>
+      <button id="pick-tar">download</button>
+      <button id="pick-move">move</button>
+      <button class="danger" id="pick-del">delete</button>
+    </div>
+  </div>
+  <div class="side-foot"><button class="quiet" id="pull-open">Copy to a computer</button></div>
+  <div id="side-resize"></div>
+</aside>
+
+<dialog id="pull-dlg">
+  <div class="head"><b>Copy to a computer</b><button class="quiet" id="pull-close">close</button></div>
+  <p class="dim">Copies every finished episode that is not there yet. Run it again later to fetch only the new ones.</p>
+  <pre id="pull-cmd"></pre>
+</dialog>
+
+<dialog id="export-dlg">
+  <div class="head"><b id="export-title"></b><button class="quiet" id="export-close">close</button></div>
+  <label><span>Dataset name</span><input id="export-name" autofocus></label>
+  <label><input type="checkbox" id="export-skip-failed" checked><span>leave out failed subtasks</span> <span class="dim" id="export-failed-n"></span></label>
+  <label><input type="checkbox" id="export-skip-untracked" checked><span>leave out subtasks with a tracking loss</span> <span class="dim" id="export-lost-n"></span></label>
+  <p class="dim" id="export-count"></p>
+  <section>
+    <h3>On the headset</h3>
+    <p class="dim">Uses the headset's cores for a while, and stops if recording starts. The dataset then waits under LeRobot exports, to download.</p>
+    <button id="export-start">export on the headset</button>
+  </section>
+  <section>
+    <h3>On a computer</h3>
+    <p class="dim">Faster, and the headset stays free. Needs Rust, Python 3, ffmpeg with libx264 (on a Mac: brew install ffmpeg) and a clone of github.com/airoa-org/yubi-go. Run this in the clone: it copies the selected episodes into ~/yubi-go/episodes, builds yubi-export, and writes the dataset to ~/lerobot. The clone's docs/lerobot-export.md has the details.</p>
+    <pre id="laptop-cmd"></pre>
+  </section>
+</dialog>
+
+<main>
+  <div id="empty" class="dim spin">loading episodes</div>
+  <section class="page" id="exports-page" hidden>
+    <div class="big">LeRobot exports</div>
+    <p class="dim">made on the headset, to download</p>
+    <div id="job"></div>
+    <p class="dim" id="exports-none" hidden>None yet. Pick episodes in the list, then press export LeRobot.</p>
+    <div id="exports"></div>
+  </section>
+  <div id="ep" hidden>
+    <div class="ep-head">
+      <div><div class="big" id="ep-label"></div><div class="dim" id="ep-sub"></div></div>
+      <div class="actions" id="ep-actions">
+        <label title="the rig drawn into the cameras"><input type="checkbox" id="overlay" checked> <span>overlay</span></label>
+        <label title="the whole recording, gestures included, not only its subtasks"><input type="checkbox" id="whole"> <span>whole episode</span></label>
+        <a id="ep-tar">download</a>
+        <a id="ep-meta" target="_blank">meta.json</a>
+        <button class="danger" id="ep-del">delete</button>
+      </div>
+    </div>
+    <div class="cams" id="cams"></div>
+    <div class="scene" id="scene">
+      <canvas id="gl"></canvas>
+      <div class="tools">
+        <label><input type="checkbox" id="follow"> <span>follow</span></label>
+        <button class="quiet" id="reset">reset view</button>
+      </div>
+      <div class="hint">drag: orbit · shift-drag: pan · wheel: zoom</div>
+      <div id="gl-note" class="dim" hidden></div>
+    </div>
+    <div class="transport" id="transport">
+      <button id="play" title="play" aria-label="play">▶︎</button>
+      <select id="speed" title="speed">
+        <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+      </select>
+      <span class="dim" id="time"></span>
+    </div>
+    <div class="plot" id="plot"><canvas></canvas><i></i></div>
+    <div class="legend">
+      <span class="left"><span>— left gripper</span> <span id="grip-left"></span></span><span class="right"><span>— right gripper</span> <span id="grip-right"></span></span>
+      <span class="dim" id="keys">space: play · ←/→: step · shift: 1 s · ↑/↓: episode</span>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const text = (el, s) => { if (el.textContent !== s) el.textContent = s; };
+
+// `fill("{n} episodes", {n: 3})`.
+const fill = (template, vars) => template.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
+
+// A tile waiting on the network says so. `waiting` only after
+// `WAIT_SHOWN_MS`, so a quick load on a fast link never flickers. Chosen by hand.
+const WAIT_SHOWN_MS = 400;
+function shade(frame, label) {
+  frame.classList.toggle("loading", !!label);
+  if (label) frame.dataset.loading = label;
+}
+function waiting(frame, label) {
+  clearTimeout(frame.wait);
+  if (label) frame.wait = setTimeout(() => shade(frame, label), WAIT_SHOWN_MS);
+  else shade(frame, null);
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) throw new Error(res.status + " " + path);
+  return res;
+}
+
+// A change asked of the headset. A refusal is shown in the device's own words,
+// which name the fix, and the caller stops.
+async function change(path, options) {
+  const res = await fetch(path, options).catch(() => null);
+  if (res && res.ok) return true;
+  const body = res ? await res.json().catch(() => ({})) : {};
+  alert(body.error || "no answer from the headset");
+  return false;
+}
+
+const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : (n / 1e6).toFixed(0) + " MB";
+// From `meta.json`'s start and end, the operator's start and stop: the
+// cameras' own spans differ by a few frames.
+const fmtLength = (ep) => ep.start_time && ep.end_time ? fmtSeconds(ep.end_time - ep.start_time) : "";
+// The console's `4h47m` style, down to seconds because a take is short.
+const fmtSeconds = (secs) => {
+  const s = Math.round(secs), m = Math.floor(s / 60), h = Math.floor(m / 60);
+  const pad = (n) => String(n).padStart(2, "0");
+  if (m === 0) return fill("{s}s", { s });
+  if (h === 0) return fill("{m}m{ss}s", { m, ss: pad(s % 60) });
+  return fill("{h}h{mm}m", { h, mm: pad(m % 60) });
+};
+const fmtSize = (ep) => [fmtLength(ep), fmtBytes(ep.bytes)].filter(Boolean).join(" · ");
+
+const CAPTION = { left: "left wrist", right: "right wrist", head: "head" };
+// A camera's name in `/state`'s `sources` (`hub::SOURCE_NAMES`).
+const sourceName = (name) => name + (name === "head" ? " cam" : " wrist cam");
+
+// --- the list ----------------------------------------------------------------
+
+let episodes = [];
+let current = null;
+
+async function loadList() {
+  try {
+    episodes = await (await api("/episodes")).json();
+  } catch (e) {
+    // Until the list first arrives; the poll below asks again.
+    if ($("empty").classList.contains("spin")) text($("empty"), "no answer from the headset");
+    return;
+  }
+  if ($("empty").classList.contains("spin")) {
+    $("empty").classList.remove("spin");
+    text($("empty"), "Pick an episode.");
+  }
+  text($("count"), "(" + episodes.length + ")");
+  renderList();
+  const want = decodeURIComponent(location.hash.slice(1));
+  if (current) return;
+  // A link to an episode that is gone (deleted after upload, or from another
+  // headset) opens Live, which nobody can take for the episode it named.
+  if (want && want !== "live" && !isPage(want) && !episodes.some((e) => e.name === want)) {
+    select("live");
+    $("missing").hidden = false;
+    text($("missing"), fill("{name} is not on this headset", { name: want }));
+  } else if (want) select(want);
+  else if (episodes.length) select(episodes[0].name);
+}
+
+// Folders the reader opened, kept per browser. Every other folder starts
+// closed, because a headset with hundreds of episodes made an open tree a wall.
+const opened = new Set((() => {
+  try { return JSON.parse(localStorage.getItem("opened")) || []; } catch (e) { return []; }
+})());
+const saveOpened = () => {
+  try { localStorage.setItem("opened", JSON.stringify([...opened])); } catch (e) {}
+};
+
+// Opens every folder above `ep`, so the episode on screen always has its row.
+function reveal(ep) {
+  let path = "";
+  let changed = false;
+  for (const part of ep.folder ? ep.folder.split("/") : []) {
+    path = path ? path + "/" + part : part;
+    if (!opened.has(path)) { opened.add(path); changed = true; }
+  }
+  if (changed) { saveOpened(); renderList(); }
+}
+const picked = new Set();
+// The episode last opened, ticked or unticked: shift-click sets every row between it and the click.
+let anchor = null;
+// The episodes the list shows, top to bottom: what ↑/↓ walk.
+let visible = [];
+
+function tree(list) {
+  const root = { dirs: new Map(), eps: [] };
+  for (const ep of list) {
+    let node = root;
+    for (const part of ep.folder ? ep.folder.split("/") : []) {
+      if (!node.dirs.has(part)) node.dirs.set(part, { dirs: new Map(), eps: [] });
+      node = node.dirs.get(part);
+    }
+    node.eps.push(ep);
+  }
+  return root;
+}
+
+const under = (node) => [...node.eps, ...[...node.dirs.values()].flatMap(under)];
+
+function box(eps) {
+  const b = document.createElement("input");
+  b.type = "checkbox";
+  const n = eps.filter((e) => picked.has(e.name)).length;
+  b.checked = n > 0 && n === eps.length;
+  b.indeterminate = n > 0 && n < eps.length;
+  b.onchange = () => {
+    for (const e of eps) b.checked ? picked.add(e.name) : picked.delete(e.name);
+    renderList();
+  };
+  return b;
+}
+
+function row(depth, ...children) {
+  const r = document.createElement("div");
+  r.className = "row";
+  r.style.paddingLeft = depth * 14 + 6 + "px";
+  r.append(...children);
+  return r;
+}
+
+function dirRow(path, name, node, depth, open) {
+  const eps = under(node);
+  const b = document.createElement("button");
+  b.className = "dir";
+  const label = document.createElement("span");
+  label.className = "name";
+  label.textContent = (open ? "▾ " : "▸ ") + name;
+  const size = document.createElement("span");
+  size.className = "dim";
+  size.textContent = eps.length + "  ·  " + fmtBytes(eps.reduce((sum, e) => sum + (e.bytes || 0), 0));
+  b.append(label, size);
+  b.onclick = () => {
+    opened.has(path) ? opened.delete(path) : opened.add(path);
+    saveOpened();
+    renderList();
+  };
+  return row(depth, box(eps), b);
+}
+
+// Gives every visible episode from the anchor to `ep` the state `on`.
+function pickRange(ep, on) {
+  const names = visible.map((e) => e.name);
+  const a = names.indexOf(anchor), z = names.indexOf(ep.name);
+  const range = a < 0 ? [ep.name] : names.slice(Math.min(a, z), Math.max(a, z) + 1);
+  for (const n of range) on ? picked.add(n) : picked.delete(n);
+  anchor = ep.name;
+  renderList();
+}
+
+function epRow(ep, depth) {
+  const b = document.createElement("button");
+  b.className = "item";
+  b.dataset.name = ep.name;
+  b.setAttribute("aria-current", ep.name === current ? "true" : "false");
+  const top = document.createElement("div");
+  top.className = "l";
+  const name = document.createElement("span");
+  name.className = "name" + (ep.success === false ? " bad" : "");
+  name.textContent = ep.label || ep.name;
+  const when = ep.start_time ? new Date(ep.start_time * 1000) : null;
+  const size = document.createElement("span");
+  size.className = "dim";
+  size.textContent = fmtSize(ep);
+  top.append(name, size);
+  b.title = ep.name + (when ? "\n" + when.toLocaleString() : "") + (ep.success === false ? "\n" + "failed" : "");
+  b.append(top);
+  // Keeps shift-click from also selecting the list's text.
+  b.onmousedown = (e) => { if (e.shiftKey) e.preventDefault(); };
+  b.onclick = (e) => {
+    if (e.shiftKey) return pickRange(ep, !picked.has(ep.name));
+    anchor = ep.name;
+    select(ep.name);
+  };
+  const check = box([ep]);
+  check.onclick = (e) => {
+    if (e.shiftKey) pickRange(ep, check.checked);
+    else anchor = ep.name;
+  };
+  return row(depth, check, b);
+}
+
+// Folders first, by name, then the folder's own episodes, newest first.
+function renderList() {
+  const rows = [];
+  visible = [];
+  const walk = (node, path, depth) => {
+    for (const [name, child] of [...node.dirs].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const p = path ? path + "/" + name : name;
+      const open = opened.has(p);
+      rows.push(dirRow(p, name, child, depth, open));
+      if (open) walk(child, p, depth + 1);
+    }
+    for (const ep of node.eps) {
+      rows.push(epRow(ep, depth));
+      visible.push(ep);
+    }
+  };
+  walk(tree(episodes), "", 0);
+  $("list").replaceChildren(...rows);
+  for (const name of [...picked]) if (!episodes.some((e) => e.name === name)) picked.delete(name);
+  const chosen = episodes.filter((e) => picked.has(e.name));
+  $("picked").hidden = chosen.length === 0;
+  $("list").classList.toggle("picking", chosen.length > 0);
+  $("pick-all").checked = chosen.length > 0 && chosen.length === episodes.length;
+  $("pick-all").indeterminate = chosen.length > 0 && chosen.length < episodes.length;
+  text($("picked-n"), fill("{n} selected · {size}", { n: chosen.length, size: fmtBytes(chosen.reduce((sum, e) => sum + (e.bytes || 0), 0)) }));
+}
+
+// The folder every chosen episode shares, or the top level.
+function sharedFolder(chosen) {
+  const parts = chosen.map((e) => (e.folder ? e.folder.split("/") : []));
+  const common = [];
+  for (let i = 0; parts.every((p) => i < p.length && p[i] === parts[0][i]); i++) common.push(parts[0][i]);
+  return common.join("/");
+}
+
+$("pick-clear").onclick = () => { picked.clear(); renderList(); };
+
+// The raw files, as one tar named after the takes' folder.
+$("pick-tar").onclick = () => {
+  const chosen = episodes.filter((e) => picked.has(e.name)).sort((a, b) => a.name.localeCompare(b.name));
+  const name = (sharedFolder(chosen).split("/").pop() || "episodes").replace(/[^A-Za-z0-9._-]+/g, "-");
+  const a = document.createElement("a");
+  a.href = "/episodes.tar?episodes=" + chosen.map((e) => e.name).join(",") + "&name=" + encodeURIComponent(name);
+  a.download = name + ".tar";
+  a.click();
+};
+
+$("pick-move").onclick = async () => {
+  const chosen = episodes.filter((e) => picked.has(e.name));
+  const folder = prompt(fill("Move {n} episodes to which folder? Blank is the top level.", { n: chosen.length }),
+    sharedFolder(chosen));
+  if (folder === null) return;
+  for (const e of chosen) {
+    if (!await change("/episodes/" + e.name + "/folder", { method: "POST", body: JSON.stringify({ folder }) })) break;
+  }
+  await loadList();
+};
+
+// One dialog for both places an export can run. The computer's command copies
+// the same takes and runs yubi-export on them from a clone
+// (docs/lerobot-export.md).
+let exportTakes = [];
+
+function laptopCmd() {
+  const quote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
+  const o = location.origin;
+  // A whole folder is named by the folder: 115 take names made a command too
+  // long to read.
+  const folder = sharedFolder(exportTakes.map((n) => episodes.find((e) => e.name === n)));
+  const pool = episodes.filter((e) => !folder || e.folder === folder || (e.folder || "").startsWith(folder + "/"));
+  const whole = folder && pool.length === exportTakes.length && pool.every((e) => exportTakes.includes(e.name));
+  const pick = whole ? " --folder " + quote(folder) : " " + exportTakes.join(" ");
+  const skip = ($("export-skip-failed").checked ? " --skip-failed" : "") +
+    ($("export-skip-untracked").checked ? " --skip-untracked" : "");
+  // The copy goes to one place whatever the clone, so a second export reuses it.
+  text($("laptop-cmd"), "curl -s " + o + "/pull.py | python3 - " + o + " ~/yubi-go/episodes" + pick +
+    " && cargo run --release -p yubi-export -- ~/yubi-go/episodes ~/lerobot/" +
+    quote($("export-name").value.trim() || "dataset") + skip + " $(cat ~/yubi-go/episodes/episodes.txt)");
+}
+
+$("pick-export").onclick = () => {
+  // Oldest first, so the dataset's episodes run in the order they were recorded.
+  const chosen = episodes.filter((e) => picked.has(e.name)).sort((a, b) => a.name.localeCompare(b.name));
+  exportTakes = chosen.map((e) => e.name);
+  const folder = sharedFolder(chosen);
+  $("export-name").value = folder ? folder.split("/").pop() : "dataset";
+  text($("export-title"), fill("Export {n} episodes as LeRobot", { n: chosen.length }));
+  laptopCmd();
+  countSubtasks(exportTakes);
+  $("export-dlg").showModal();
+};
+
+// What the two options drop, a subtask each: `{failed, lost}` from the
+// headset, which reads each take's signals once (~0.5 s for a 58 MB take).
+let exportFlags = [], exportCounting = 0, exportRead = [0, 0], exportUnread = 0;
+async function countSubtasks(takes) {
+  const run = ++exportCounting;
+  exportFlags = [];
+  exportUnread = 0;
+  let done = 0;
+  showCounts(0, takes.length);
+  const queue = [...takes];
+  // Four at once, so a long selection fills in while the dialog is open.
+  await Promise.all([0, 1, 2, 3].map(async () => {
+    for (let take; (take = queue.shift()) !== undefined;) {
+      let flags = [];
+      try { flags = await (await api("/episodes/" + take + "/subtasks")).json(); } catch (e) { exportUnread++; }
+      if (run !== exportCounting) return;
+      exportFlags.push(...flags);
+      showCounts(++done, takes.length);
+    }
+  }));
+}
+function showCounts(done, total) {
+  exportRead = [done, total];
+  const all = exportFlags.length, failed = exportFlags.filter((f) => f.failed).length;
+  const lost = exportFlags.filter((f) => f.lost).length;
+  const leaveFailed = $("export-skip-failed").checked, leaveLost = $("export-skip-untracked").checked;
+  const kept = exportFlags.filter((f) => !(leaveFailed && f.failed) && !(leaveLost && f.lost)).length;
+  text($("export-failed-n"), fill("({n} of {all})", { n: failed, all }));
+  text($("export-lost-n"), fill("({n} of {all})", { n: lost, all }));
+  text($("export-count"), (done < total ? fill("reading episodes {done} / {total}", { done, total }) + " · " : "") +
+    fill("exports {kept} of {all} subtasks", { kept, all }) +
+    (exportUnread ? " · " + fill("{n} episodes could not be read", { n: exportUnread }) : ""));
+}
+const recount = () => showCounts(...exportRead);
+$("export-name").oninput = laptopCmd;
+$("export-skip-failed").onchange = () => { laptopCmd(); recount(); };
+$("export-skip-untracked").onchange = () => { laptopCmd(); recount(); };
+$("export-close").onclick = () => $("export-dlg").close();
+// A click on the backdrop lands on the dialog itself.
+$("export-dlg").onclick = (e) => { if (e.target === $("export-dlg")) $("export-dlg").close(); };
+
+$("export-start").onclick = async () => {
+  const name = $("export-name").value.trim() || "dataset";
+  if (!await change("/exports", { method: "POST", body: JSON.stringify({ name, episodes: exportTakes, skip_failed: $("export-skip-failed").checked, skip_untracked: $("export-skip-untracked").checked }) })) return;
+  $("export-dlg").close();
+  // Already open, the page would not reload, and would miss the new job.
+  current === "exports" ? loadExports() : select("exports");
+};
+
+// --- the LeRobot exports -------------------------------------------------------
+
+let exportsPoll = null;
+
+// rerun_view.py carries its own pins and takes the export's address or a downloaded .tar;
+// its docstring says why the pins. lerobot's own visualize_dataset draws no feature but
+// `action` and `observation.state`.
+function rerunCmd(what) {
+  return "curl -s " + location.origin + "/rerun_view.py | uv run - " + what;
+}
+
+// The pace of the phase running now, from the first item this page saw finish
+// to the latest, so the estimate counts only time the page watched. Videos go
+// largest first, so their estimate starts high and shrinks.
+let pace = null;
+function secondsLeft(key, n, total) {
+  const now = Date.now();
+  if (!pace || pace.key !== key) pace = { key, n, at: now, first: null };
+  if (n !== pace.n) {
+    pace.first = pace.first || { n, at: now };
+    Object.assign(pace, { n, at: now });
+  }
+  const f = pace.first;
+  if (!f || n === f.n) return null;
+  return Math.max(0, (pace.at - f.at) / (n - f.n) * (total - n) - (now - pace.at)) / 1000;
+}
+
+// The export reads every take, then writes every video. `step` is the
+// headset's own text ("episode 3 of 10: reading", "videos: 12 of 30"), so the
+// bar takes its numbers from that.
+function jobProgress(job) {
+  const reading = /^episode (\d+) of (\d+)/.exec(job.step), videos = /^videos: (\d+) of (\d+)/.exec(job.step);
+  const [phase, nums] = reading ? ["1/2 reading episodes", reading]
+    : videos ? ["2/2 writing videos", videos] : ["starting", null];
+  const head = document.createElement("div");
+  head.textContent = fill("exporting {name}", job);
+  const bar = document.createElement("progress");
+  if (nums) { bar.max = +nums[2]; bar.value = +nums[1]; }
+  bar.style.accentColor = videos ? "var(--accent)" : "var(--warn)";
+  const line = document.createElement("div");
+  line.className = "dim";
+  line.style.color = bar.style.accentColor;
+  const left = nums && secondsLeft(job.id + phase, +nums[1], +nums[2]);
+  line.textContent = !nums ? phase : [phase, nums[1] + " / " + nums[2], Math.floor(100 * nums[1] / nums[2]) + "%",
+    ...(left === null ? [] : [fill(videos ? "about {t} left" : "reading done in about {t}", { t: fmtSeconds(left) })])].join(" · ");
+  return [head, bar, line];
+}
+
+async function loadExports() {
+  clearTimeout(exportsPoll);
+  let s;
+  try { s = await (await api("/exports")).json(); } catch (e) { return; }
+  const job = s.job;
+  const running = !!job && job.state === "running";
+  const done = running && /(\d+) of (\d+)/.exec(job.step);
+  text($("exports-n"), running ? (done ? done[1] + " / " + done[2] : "running")
+    : s.exports.length ? "(" + s.exports.length + ")" : "");
+  $("exports-none").hidden = s.exports.length > 0 || running;
+  $("job").className = job && job.state === "failed" ? "bad" : "";
+  $("job").replaceChildren(...(!job ? []
+    : job.state === "running" ? jobProgress(job)
+    : [document.createTextNode(fill("{name} failed: {error}", job))]));
+  $("exports").replaceChildren(...s.exports.map((x) => {
+    const el = document.createElement("div");
+    el.className = "export";
+    const name = document.createElement("div");
+    name.textContent = x.name;
+    const sub = document.createElement("div");
+    sub.className = "dim";
+    sub.textContent = fill("{episodes} episodes → {lerobot} LeRobot episodes · {size}", { episodes: x.episodes.length, lerobot: x.lerobot_episodes, size: fmtBytes(x.bytes) });
+    // Folded, because a long export can carry a warning per take.
+    const warn = document.createElement("details");
+    const warnSum = document.createElement("summary");
+    warnSum.textContent = fill("{n} warnings", { n: (x.warnings || []).length });
+    warn.append(warnSum, ...(x.warnings || []).map((w) => {
+      const line = document.createElement("div");
+      line.className = "dim";
+      line.textContent = w;
+      return line;
+    }));
+    warn.hidden = !(x.warnings || []).length;
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const tar = document.createElement("a");
+    tar.href = "/exports/" + x.id + ".tar";
+    tar.download = x.id + ".tar";
+    tar.textContent = "download";
+    const del = document.createElement("button");
+    del.className = "quiet";
+    del.textContent = "delete";
+    del.onclick = async () => {
+      if (!confirm(fill("Delete the export {name}?", { name: x.name }))) return;
+      await change("/exports/" + x.id, { method: "DELETE" });
+      loadExports();
+    };
+    actions.append(tar, del);
+    const view = document.createElement("details");
+    const viewSum = document.createElement("summary");
+    viewSum.textContent = "view in Rerun";
+    const cmd = document.createElement("pre");
+    cmd.textContent = rerunCmd(location.origin + "/exports/" + x.id + ".tar");
+    const dl = document.createElement("div");
+    dl.className = "dim";
+    dl.textContent = "Downloaded the .tar already? Give its path instead:";
+    const dlCmd = document.createElement("pre");
+    dlCmd.textContent = rerunCmd("~/Downloads/" + x.id + ".tar");
+    view.append(viewSum, cmd, dl, dlCmd);
+    el.append(name, sub, warn, actions, view);
+    return el;
+  }));
+  if (running) {
+    exportsPoll = setTimeout(loadExports, 1500);
+  }
+}
+
+function select(name) {
+  $("missing").hidden = true;
+  if (location.hash.slice(1) !== name) history.replaceState(null, "", "#" + name);
+  // Framed by the console, whose address is the one the reader sees and copies.
+  if (parent !== window) parent.history.replaceState(null, "", "#viewer/" + name);
+  const ep = episodes.find((e) => e.name === name);
+  if (ep) reveal(ep);
+  const items = [$("live-item"), $("exports-item"), ...$("list").querySelectorAll(".item")];
+  for (const b of items) b.setAttribute("aria-current", b.dataset.name === name ? "true" : "false");
+  const el = items.find((b) => b.dataset.name === name);
+  if (el) el.scrollIntoView({ block: "nearest" });
+  if (name === current) return;
+  for (const [page, id] of Object.entries(PAGES)) $(id).hidden = page !== name;
+  if (name === "live") openLive();
+  else if (name in PAGES) openPage(name);
+  else openEpisode(episodes.find((e) => e.name === name));
+}
+
+// Pages that fill the main pane in place of an episode.
+const PAGES = { exports: "exports-page" };
+const isPage = (name) => name === "exports";
+
+function openPage(name) {
+  closeEpisode();
+  mode = name;
+  current = name;
+  $("empty").hidden = true;
+  $("ep").hidden = true;
+  loadExports();
+}
+
+// Live sits above the newest episode.
+function step(by) {
+  const list = visible;
+  const i = list.findIndex((e) => e.name === current);
+  if (i + by < 0) return select("live");
+  const next = list[Math.min(i + by, list.length - 1)];
+  if (next) select(next.name);
+}
+
+$("live-item").onclick = () => select("live");
+$("exports-item").onclick = () => select("exports");
+$("pull-open").onclick = () => $("pull-dlg").showModal();
+$("pull-close").onclick = () => $("pull-dlg").close();
+$("pull-dlg").onclick = (e) => { if (e.target === $("pull-dlg")) $("pull-dlg").close(); };
+
+addEventListener("hashchange", () => {
+  const name = decodeURIComponent(location.hash.slice(1));
+  if (name === "live" || isPage(name) || episodes.some((e) => e.name === name)) select(name);
+});
+
+// The frame nearest `t`. For a picture this, not `frameAt`: the frame
+// before can be a whole interval old where the next is closer.
+function nearestAt(ts, t) {
+  const i = frameAt(ts, t);
+  return i + 1 < ts.length && ts[i + 1] - t < t - ts[i] ? i + 1 : i;
+}
+
+// --- the player --------------------------------------------------------------
+//
+// One clock, `player.t` in ms from the take's first stamp, drives every tile,
+// the 3D view and the plot. H.264 cameras are `<video>` over the mp4 the
+// headset cuts from the take. A JPEG camera is one `<img>` asked for the frame
+// under the clock, with no new request until the last one arrives, so on a
+// slow link it shows fewer frames, and late ones.
+//
+// While playing, the clock is the frame the first video is presenting, not a
+// wall clock the videos are pulled toward: a wall clock lets the 3D view run
+// up to 200 ms off the pictures. The other videos are sped up or slowed down
+// toward it. Each camera also knows the frame it is presenting
+// (`cam.presented`), and its overlay is drawn at that frame, so a picture and
+// its overlay always agree even where two pictures do not.
+const player = { cams: [], t: 0, start: 0, end: 0, playing: false, last: 0, raf: 0, rate: 1, plot: null, poses: {}, master: null, late: 0, stopAt: null };
+const HAS_VFC = "requestVideoFrameCallback" in HTMLVideoElement.prototype;
+
+// What the scene draws at: live, the newest sample; otherwise
+// the instant the clock camera's picture was exposed, which is `player.late`
+// before its stamp.
+let mode = "episode";
+const now = () => (mode === "live" ? live.t : player.t - player.late);
+
+// The last sample at or before `t`, by binary search: intervals are not
+// uniform, so `t * rate` lands on the wrong one.
+function frameAt(ts, t) {
+  let lo = 0, hi = ts.length - 1;
+  if (t <= ts[0]) return 0;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ts[mid] <= t) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+
+// `keepTiles`: the old tiles hold their place until the next episode's
+// replace them, so nothing below them moves twice.
+function closeEpisode(keepTiles) {
+  closeLive();
+  pause();
+  // Without `load()` an emptied `<video>` keeps its range request open.
+  for (const c of player.cams) if (c.video) {
+    if (c.vfc) c.video.cancelVideoFrameCallback(c.vfc);
+    c.video.removeAttribute("src");
+    c.video.load();
+  }
+  player.cams = [];
+  player.master = null;
+  player.poses = {};
+  if (!keepTiles) $("cams").replaceChildren();
+}
+
+async function openEpisode(ep) {
+  closeEpisode(true);
+  for (const frame of $("cams").querySelectorAll(".frame")) shade(frame, "loading");
+  mode = "episode";
+  current = ep.name;
+  $("empty").hidden = true;
+  $("ep").hidden = false;
+  for (const id of ["ep-actions", "transport", "keys"]) $(id).hidden = false;
+  text($("ep-label"), ep.label || ep.name);
+  text($("ep-sub"), (ep.folder ? ep.folder + "/" : "") + ep.name + "  ·  " + fmtSize(ep) +
+    (ep.start_time ? "  ·  " + new Date(ep.start_time * 1000).toLocaleString() : "") +
+    (ep.success === false ? "  ·  " + "failed" : ""));
+  $("ep-tar").href = "/episodes/" + ep.name + ".tar";
+  $("ep-tar").download = ep.name + ".tar";
+  $("ep-meta").href = "/episodes/" + ep.name + "/meta.json";
+  let v, meta = null;
+  try {
+    const metaReq = api("/episodes/" + ep.name + "/meta.json").then((r) => r.json()).catch(() => null);
+    v = await (await api("/episodes/" + ep.name + "/view")).json();
+    meta = await metaReq;
+  } catch (e) {
+    $("cams").textContent = "cannot load this episode" + ": " + e.message;
+    return;
+  }
+  if (current !== ep.name) return;
+  // Awaited, because `player.late` below reads the calibration's delays.
+  await loadCalibration(calibrationId(meta));
+  if (current !== ep.name) return;
+  const base = "/episodes/" + ep.name + "/view/";
+  player.cams = v.cameras.map((c) => {
+    const fig = document.createElement("figure");
+    const frame = document.createElement("div");
+    frame.className = "frame loading";
+    frame.dataset.loading = "loading";
+    const cap = document.createElement("figcaption");
+    const n = c.t_ms.length;
+    const fps = n > 1 ? ((n - 1) * 1000 / (c.t_ms[n - 1] - c.t_ms[0])).toFixed(1) + " Hz" : "";
+    const caption = (size) => [(CAPTION[c.name] || c.name), c.codec, size, fps].filter(Boolean).join("  ");
+    cap.textContent = caption("");
+    const loaded = () => waiting(frame, null);
+    const cam = { frame, name: c.name, ts: c.t_ms, shown: -1, loading: false, presented: null, overlay: null, drawn: null };
+    // The tile takes the picture's own aspect once it is known.
+    const fit = (w, h) => {
+      if (!w || !h) return;
+      frame.style.aspectRatio = w + " / " + h;
+      fig.style.flexGrow = String(w / h);
+      fig.style.setProperty("--aspect", w / h);
+      cap.textContent = caption(w + "×" + h);
+    };
+    if (c.codec === "h264") {
+      cam.video = Object.assign(document.createElement("video"),
+        { muted: true, playsInline: true, preload: "auto", src: base + c.name + ".mp4" });
+      cam.video.onloadedmetadata = () => fit(cam.video.videoWidth, cam.video.videoHeight);
+      // Its own first frame first: a seek asked before that is held until
+      // the frame it names decodes, and the tile stays black until then.
+      cam.video.addEventListener("loadeddata", () => { cam.ready = true; loaded(); show(); }, { once: true });
+      cam.video.playbackRate = player.rate;
+      // `stalled` is no data for about 3 s, and `progress` is data again.
+      const busy = () => waiting(frame, "loading");
+      for (const e of ["waiting", "seeking"]) cam.video.addEventListener(e, busy);
+      for (const e of ["playing", "seeked", "canplay"]) cam.video.addEventListener(e, () => cam.ready && loaded());
+      cam.video.addEventListener("stalled", () => frame.classList.contains("loading") && shade(frame, "no answer from the headset"));
+      cam.video.addEventListener("progress", () => frame.classList.contains("loading") && shade(frame, "loading"));
+      cam.video.addEventListener("error", () => waiting(frame, "no answer from the headset"));
+      if (HAS_VFC) {
+        // `mediaTime` is the presented frame's own stamp, from the take's
+        // first frame, so the nearest stamp names it exactly.
+        const onFrame = (_, meta) => {
+          cam.vfc = cam.video.requestVideoFrameCallback(onFrame);
+          if (cam.video.seeking) return;
+          cam.presented = cam.ts[frameAt(cam.ts, cam.ts[0] + meta.mediaTime * 1000 + 0.5)];
+          if (!player.playing) drawOverlays();
+        };
+        cam.vfc = cam.video.requestVideoFrameCallback(onFrame);
+      }
+      frame.append(cam.video);
+    } else {
+      cam.img = document.createElement("img");
+      cam.img.onload = () => {
+        cam.loading = false;
+        cam.presented = cam.ts[cam.shown];
+        loaded();
+        fit(cam.img.naturalWidth, cam.img.naturalHeight);
+        show();
+      };
+      cam.img.onerror = () => { cam.loading = false; waiting(frame, "no answer from the headset"); };
+      cam.src = (i) => base + c.name + "/" + i + ".jpg";
+      frame.append(cam.img);
+    }
+    if (["left", "right"].includes(c.name)) {
+      const canvas = document.createElement("canvas");
+      frame.append(canvas);
+      cam.overlay = overlayView(canvas, c.name);
+    }
+    fit(c.width, c.height);
+    fig.append(frame, cap);
+    cam.fig = fig;
+    return cam;
+  });
+  $("cams").replaceChildren(...player.cams.map((c) => c.fig));
+  player.master = HAS_VFC ? player.cams.find((c) => c.video) || null : null;
+  // Without a master the clock is a wall clock, and the first camera is the
+  // one whose frames the transport steps through.
+  const ref = player.master ? v.cameras[player.cams.indexOf(player.master)] : v.cameras[0];
+  player.late = ref && (ref.name === "left" || ref.name === "right") ? wristLate(ref.name) : 0;
+  const last = (ts) => ts[ts.length - 1];
+  const end = Math.max(0, ...v.cameras.map((c) => last(c.t_ms)), ...v.grippers.map((g) => last(g.t_ms)));
+  // `meta.json` stamps are wall-clock seconds, and so is the file's origin.
+  const origin = Number(v.origin_ns) / 1e6;
+  const marks = ((meta && meta.segments) || []).map((seg) => ({
+    at: seg.start_time * 1000 - origin,
+    end: seg.end_time * 1000 - origin,
+    label: (meta.labels || [])[seg.label_idx] || "",
+    failed: seg.success === false,
+  }));
+  // By default only the subtasks are shown: before the first is the start
+  // gesture, and after the last the stop gesture.
+  const clamp = (ms) => Math.min(Math.max(ms, 0), end);
+  const start = marks.length ? clamp(Math.min(...marks.map((m) => m.at))) : 0;
+  player.trimmed = [start, marks.length ? Math.max(start, clamp(Math.max(...marks.map((m) => m.end)))) : end];
+  player.whole = [0, end];
+  [player.start, player.end] = $("whole").checked ? player.whole : player.trimmed;
+  // The plot is on the clock itself, not `player.late` behind it: an encoder
+  // line is stamped as late after the jaw moves as a wrist frame is after
+  // its exposure: in a recorded click, the shut and the opening land within
+  // a frame (10 ms) of each other in both. Tracking losses are
+  // pose times, so they move onto the clock.
+  const untracked = Object.fromEntries(Object.entries(v.untracked || {})
+    .map(([track, spans]) => [track, spans.map(([a, b]) => [a + player.late, b + player.late])]));
+  player.plot = { grippers: v.grippers, marks, untracked, t0: player.start, t1: player.end };
+  player.poses = v.poses || {};
+  scene.load(player.poses, true);
+  drawPlot(player.plot);
+  seek(player.start);
+}
+
+// Seeking a video forgets what it presented: until its next frame, that
+// says nothing about where it is.
+function seekVideo(c, s) {
+  c.video.currentTime = s;
+  c.presented = null;
+}
+
+function show() {
+  const now = player.t;
+  if (mode !== "episode") return;
+  for (const c of player.cams) {
+    if (c.video) {
+      if (!c.ready) continue;
+      const last = c.ts[c.ts.length - 1];
+      if (!player.playing) {
+        // Paused: exactly the frame under the clock. Half a millisecond
+        // past its stamp, so rounding cannot show the frame before.
+        const want = (c.ts[nearestAt(c.ts, now)] - c.ts[0]) / 1000 + 0.0005;
+        if (Math.abs(c.video.currentTime - want) > 0.001) seekVideo(c, want);
+      } else if (c !== player.master || masterGone()) {
+        // Playing: a small drift is taken out by playing faster or slower,
+        // which a viewer cannot see, and only a large one by a seek. The rate
+        // is off by the drift per second, at most 10 %, so 50 ms closes in
+        // about a second. A drift over 120 ms is a seek, because only a stall
+        // or a hiccup leaves that much.
+        const want = Math.min(Math.max(now - c.ts[0], 0), last - c.ts[0]) / 1000;
+        const drift = c.video.currentTime - want;
+        if (Math.abs(drift) > 0.12) seekVideo(c, want);
+        const rate = player.rate * Math.min(Math.max(1 - drift / 1.0, 0.9), 1.1);
+        if (Math.abs(c.video.playbackRate - rate) > 0.005 * player.rate) c.video.playbackRate = rate;
+      }
+      // Not an ended one: `play()` restarts it from 0, and the clock can sit
+      // a few ms short of the last stamp when the video ends.
+      if (player.playing && c.video.paused && !c.video.ended && now < last) c.video.play().catch(() => {});
+    } else {
+      const i = nearestAt(c.ts, now);
+      if (i !== c.shown && !c.loading) {
+        c.loading = true;
+        c.shown = i;
+        c.img.src = c.src(i);
+        waiting(c.frame, "loading");
+      }
+    }
+  }
+  text($("time"), ((now - player.start) / 1000).toFixed(2) + " / " + ((player.end - player.start) / 1000).toFixed(1) + " s");
+  cursor(player.plot, now);
+  gripperValues(player.plot, now);
+  scene.draw();
+  drawOverlays();
+}
+
+// Paused, the clock sits on one of the clock camera's frames, so the scene
+// and the plot are at exactly the picture on screen and not up to a frame off.
+function snapToFrame(t) {
+  const c = player.master || player.cams[0];
+  if (!c) return t;
+  // The nearest frame may lie just outside the subtasks; the one inside is shown.
+  let i = nearestAt(c.ts, t);
+  if (c.ts[i] < player.start && i + 1 < c.ts.length) i++;
+  else if (c.ts[i] > player.end && i > 0) i--;
+  return c.ts[i];
+}
+
+function seek(ms) {
+  player.stopAt = null;
+  player.t = Math.min(Math.max(ms, player.start), player.end);
+  if (!player.playing) player.t = snapToFrame(player.t);
+  // Playing, the master is otherwise left alone; a seek has to move it too.
+  const m = player.master;
+  if (player.playing && m) seekVideo(m, Math.min(Math.max(player.t - m.ts[0], 0), m.ts[m.ts.length - 1] - m.ts[0]) / 1000);
+  show();
+}
+
+// Past its last frame, or broken, the master cannot be the clock.
+const masterGone = () => !player.master || player.master.video.ended || !!player.master.video.error;
+
+function loop(now) {
+  if (!player.playing) return;
+  // The master's presented frame, or nothing until it presents one: a
+  // video still starting or seeking holds the clock, so nothing runs ahead
+  // of the picture.
+  if (!masterGone()) {
+    if (player.master.presented !== null) player.t = player.master.presented;
+  } else {
+    player.t += (now - player.last) * player.rate;
+  }
+  player.last = now;
+  const stop = player.stopAt ?? player.end;
+  if (player.t >= stop) {
+    player.t = stop;
+    pause();
+  }
+  show();
+  player.raf = requestAnimationFrame(loop);
+}
+
+function play() {
+  if (!current || mode !== "episode") return;
+  // `pause` snaps the playhead to a frame, and the last frame sits before
+  // `end`, so a take that played through rests there rather than at `end`.
+  // `seek`, not just the clock: the master still holds the end frame as
+  // presented, and the first tick would read the clock straight back from it.
+  if (player.t >= snapToFrame(player.end)) seek(player.start);
+  player.playing = true;
+  player.last = performance.now();
+  setPlay("pause");
+  player.raf = requestAnimationFrame(loop);
+}
+
+function pause() {
+  player.playing = false;
+  player.stopAt = null;
+  cancelAnimationFrame(player.raf);
+  for (const c of player.cams) if (c.video) { c.video.pause(); c.video.playbackRate = player.rate; }
+  player.t = snapToFrame(player.t);
+  setPlay("play");
+  if (current && mode === "episode") show();
+}
+
+// One frame of the first camera, which is the finest clock on screen.
+function stepFrame(by) {
+  const c = player.cams[0];
+  if (!c) return seek(player.t + by * 33);
+  const i = frameAt(c.ts, player.t + 0.05);
+  seek(c.ts[Math.min(Math.max(i + by, 0), c.ts.length - 1)]);
+}
+
+// U+FE0E keeps both glyphs as text, so they take the button's colour
+// instead of turning into emoji.
+function setPlay(what) {
+  const b = $("play");
+  b.textContent = what === "play" ? "▶\uFE0E" : "⏸\uFE0E";
+  b.title = what;
+  b.setAttribute("aria-label", what);
+}
+
+$("play").onclick = () => (player.playing ? pause() : play());
+$("speed").onchange = () => {
+  player.rate = Number($("speed").value);
+  for (const c of player.cams) if (c.video) c.video.playbackRate = player.rate;
+};
+$("ep-del").onclick = async () => {
+  const name = current;
+  if (!name || !confirm(fill("Delete {name}? This cannot be undone.", { name }))) return;
+  const list = visible;
+  const next = list[list.findIndex((e) => e.name === name) + 1] || list[list.findIndex((e) => e.name === name) - 1];
+  if (!await change("/episodes/" + name, { method: "DELETE" })) return;
+  closeEpisode();
+  current = null;
+  $("ep").hidden = true;
+  $("empty").hidden = false;
+  await loadList();
+  if (next) select(next.name);
+};
+
+$("pick-all").onchange = () => {
+  if ($("pick-all").checked) for (const e of episodes) picked.add(e.name);
+  else picked.clear();
+  renderList();
+};
+
+$("pick-del").onclick = async () => {
+  const list = episodes.filter((e) => picked.has(e.name));
+  const size = fmtBytes(list.reduce((sum, e) => sum + (e.bytes || 0), 0));
+  if (!list.length || !confirm(fill("Delete {n} episodes ({size})? This cannot be undone.", { n: list.length, size }))) return;
+  if (list.some((e) => e.name === current)) {
+    closeEpisode();
+    current = null;
+    $("ep").hidden = true;
+    $("empty").hidden = false;
+  }
+  for (const e of list) {
+    if (!await change("/episodes/" + e.name, { method: "DELETE" })) break;
+    picked.delete(e.name);
+  }
+  await loadList();
+};
+
+addEventListener("keydown", (e) => {
+  if (e.target instanceof HTMLInputElement && e.target.type !== "checkbox") return;
+  if (e.target instanceof HTMLSelectElement) return;
+  const k = e.key;
+  if (mode !== "episode" && k !== "ArrowUp" && k !== "ArrowDown") return;
+  if (k === " ") player.playing ? pause() : play();
+  else if (k === "ArrowLeft") e.shiftKey ? seek(player.t - 1000) : stepFrame(-1);
+  else if (k === "ArrowRight") e.shiftKey ? seek(player.t + 1000) : stepFrame(1);
+  else if (k === "ArrowUp") step(-1);
+  else if (k === "ArrowDown") step(1);
+  else return;
+  e.preventDefault();
+});
+
+// --- the gripper plot --------------------------------------------------------
+
+// `p`: the gripper series, the subtask spans, the spans each pose was not
+// tracked (episodes only), and the span `t0..t1` across the plot, in the same
+// ms as the series.
+//
+// A pose that is not tracked is only extrapolated, or lost outright. Its spans
+// shade the whole plot red, and a label in the span says whose pose it was.
+const LABEL_ROW = 13;
+const UNTRACKED = [["left_controller", "left hand lost"], ["right_controller", "right hand lost"], ["hmd", "headset lost"]];
+function drawPlot(p) {
+  const canvas = $("plot").querySelector("canvas");
+  if (!p) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const g = canvas.getContext("2d");
+  g.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement);
+  const span = Math.max(p.t1 - p.t0, 1);
+  // Fixed, so one take's grip reads against another's: a YUBI jaw opens to
+  // 45° at most. The series is in radians.
+  const lo = -5 * Math.PI / 180, hi = 50 * Math.PI / 180;
+  const x = (ms) => ((ms - p.t0) / span) * w;
+  const y = (v) => h - 6 - ((v - lo) / (hi - lo)) * (h - 22);
+  const lost = UNTRACKED.flatMap(([track, label], row) =>
+    ((p.untracked && p.untracked[track]) || []).map(([a, b]) => ({ a, b, label, row })));
+  g.globalAlpha = 0.25;
+  g.fillStyle = css.getPropertyValue("--alert");
+  for (const s of lost) g.fillRect(x(s.a), 0, Math.max(x(s.b) - x(s.a), 1), h);
+  g.globalAlpha = 1;
+  g.font = "11px ui-monospace, monospace";
+  g.fillStyle = css.getPropertyValue("--dim");
+  // Grey is time outside every subtask: the pre-roll, each double squeeze, and
+  // the stop squeeze to the end of the file.
+  g.globalAlpha = 0.2;
+  p.marks.forEach((m, i) => {
+    const from = i ? p.marks[i - 1].end : p.t0;
+    g.fillRect(x(from), 0, Math.max(x(m.at) - x(from), 0), h);
+  });
+  if (p.marks.length) {
+    const from = p.marks[p.marks.length - 1].end;
+    g.fillRect(x(from), 0, Math.max(x(p.t1) - x(from), 0), h);
+  }
+  g.globalAlpha = 1;
+  // A label that would run into an earlier one drops to the first free row.
+  // Rows stop at half the plot; past that it takes the row that frees up first.
+  const ends = [], rows = Math.max(1, Math.floor(h / 2 / LABEL_ROW));
+  for (const m of p.marks) {
+    g.globalAlpha = m === p.hover ? 1 : 0.4;
+    g.fillStyle = css.getPropertyValue(m === p.hover ? "--play" : "--dim");
+    g.fillRect(Math.round(x(m.at)), 0, 1, h);
+    g.fillRect(Math.round(x(m.end)), 0, 1, h);
+    g.globalAlpha = 1;
+    const x0 = x(m.at), x1 = x0 + g.measureText(m.label).width + 8;
+    let row = ends.findIndex((e) => e <= x0);
+    if (row < 0) row = ends.length < rows ? ends.length : ends.indexOf(Math.min(...ends));
+    ends[row] = x1;
+    m.box = [x0, x1, row * LABEL_ROW, (row + 1) * LABEL_ROW + 2];
+    // The hovered label is the one a click plays, so it and its span light up.
+    if (m === p.hover) {
+      g.fillStyle = css.getPropertyValue("--play");
+      g.globalAlpha = 0.22;
+      g.fillRect(x(m.at), 0, Math.max(x(m.end) - x(m.at), 1), h);
+      g.globalAlpha = 0.6;
+      g.fillRect(x0 + 1, m.box[2], x1 - x0 - 2, LABEL_ROW);
+      g.globalAlpha = 1;
+    }
+    g.fillStyle = css.getPropertyValue(m.failed ? "--alert" : m === p.hover ? "--fg" : "--dim");
+    g.fillText(m.label, x0 + 4, 11 + row * LABEL_ROW);
+    g.fillStyle = css.getPropertyValue("--dim");
+  }
+  for (const side of p.grippers) {
+    g.strokeStyle = css.getPropertyValue(side.name === "left" ? "--accent" : "--warn");
+    g.lineWidth = 1.5;
+    g.beginPath();
+    side.t_ms.forEach((ms, i) => (i ? g.lineTo : g.moveTo).call(g, x(ms), y(side.position[i])));
+    g.stroke();
+  }
+  // On top of the lines, so a label stays readable where a jaw crosses it.
+  for (const s of lost) {
+    const label = s.label + " " + fill("{s}s", { s: ((s.b - s.a) / 1000).toFixed(1) });
+    const lx = Math.min(x(s.a), w - g.measureText(label).width - 6), ly = h - 4 - 14 * s.row;
+    g.fillStyle = css.getPropertyValue("--bg");
+    g.globalAlpha = 0.8;
+    g.fillRect(lx, ly - 11, g.measureText(label).width + 6, 14);
+    g.globalAlpha = 1;
+    g.fillStyle = css.getPropertyValue("--alert");
+    g.fillText(label, lx + 3, ly);
+  }
+}
+
+// The sample at or before the playhead, as recorded: radians, rounded to
+// 1e-4 by the view, which is under the encoder's 0.088° step.
+function gripperValues(p, ms) {
+  for (const name of ["left", "right"]) {
+    const g = p && mode === "episode" && p.grippers.find((s) => s.name === name);
+    const v = g && g.t_ms.length && ms >= g.t_ms[0] ? g.position[frameAt(g.t_ms, ms)] : null;
+    text($("grip-" + name), v === null ? "" : v.toFixed(4) + " rad  " + (v * 180 / Math.PI).toFixed(2) + "°");
+  }
+}
+
+function cursor(p, ms) {
+  const i = $("plot").querySelector("i");
+  i.hidden = !p || mode === "live";
+  if (p) i.style.left = ((ms - p.t0) / Math.max(p.t1 - p.t0, 1)) * 100 + "%";
+}
+
+{
+  const plot = $("plot");
+  const at = (e) => {
+    if (mode !== "episode") return;
+    const r = plot.getBoundingClientRect();
+    seek(player.start + ((e.clientX - r.left) / r.width) * (player.end - player.start));
+  };
+  // The subtask whose label is under the pointer.
+  const label = (e) => {
+    if (mode !== "episode" || !player.plot) return null;
+    const r = plot.getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    return player.plot.marks.find((m) => m.box && px >= m.box[0] && px <= m.box[1] && py >= m.box[2] && py <= m.box[3]) || null;
+  };
+  // Plays that subtask alone.
+  const playSpan = (m) => {
+    seek(m.at);
+    player.stopAt = Math.min(m.end, player.end);
+    if (!player.playing) play();
+  };
+  plot.addEventListener("pointerdown", (e) => {
+    const m = label(e);
+    if (m) return playSpan(m);
+    plot.setPointerCapture(e.pointerId);
+    at(e);
+  });
+  const hover = (m) => {
+    plot.style.cursor = m ? "pointer" : "";
+    if (mode !== "episode" || !player.plot || player.plot.hover === m) return;
+    player.plot.hover = m;
+    drawPlot(player.plot);
+  };
+  plot.addEventListener("pointermove", (e) => {
+    if (e.buttons) at(e);
+    else hover(label(e));
+  });
+  plot.addEventListener("pointerleave", () => hover(null));
+}
+
+// --- quaternions and matrices ------------------------------------------------
+//
+// Quaternions are (x, y, z, w), as the recorder writes them. Matrices are
+// column-major, as WebGL takes them.
+
+const qmul = (a, b) => [
+  a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+  a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+  a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+];
+function qrot(q, v) {
+  const [x, y, z, w] = q;
+  const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+  return [v[0] + w * tx + y * tz - z * ty, v[1] + w * ty + z * tx - x * tz, v[2] + w * tz + x * ty - y * tx];
+}
+// The recorder's remap from OpenXR (y up, -z forward) to ROS (`mount::xr_to_ros`).
+// A raw XR pose is recorded as the conjugation `W q W⁻¹`, so a mesh authored in
+// an XR frame is placed by `q W`; a URDF link's pose is placed as it is.
+const W = qmul([0, 0, Math.sin(-Math.PI / 4), Math.cos(-Math.PI / 4)],
+               [Math.sin(Math.PI / 4), 0, 0, Math.cos(Math.PI / 4)]);
+
+function model(p, q) {
+  const [x, y, z, w] = q;
+  const n = x * x + y * y + z * z + w * w || 1, s = 2 / n;
+  return new Float32Array([
+    1 - s * (y * y + z * z), s * (x * y + z * w), s * (x * z - y * w), 0,
+    s * (x * y - z * w), 1 - s * (x * x + z * z), s * (y * z + x * w), 0,
+    s * (x * z + y * w), s * (y * z - x * w), 1 - s * (x * x + y * y), 0,
+    p[0], p[1], p[2], 1,
+  ]);
+}
+function mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+  }
+  return o;
+}
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return new Float32Array([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0]);
+}
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm3 = (a) => { const n = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / n, a[1] / n, a[2] / n]; };
+function lookAt(eye, target, up) {
+  const f = norm3(sub3(target, eye)), r = norm3(cross3(f, up)), u = cross3(r, f);
+  const d = (a) => a[0] * eye[0] + a[1] * eye[1] + a[2] * eye[2];
+  return new Float32Array([r[0], u[0], -f[0], 0, r[1], u[1], -f[1], 0, r[2], u[2], -f[2], 0, -d(r), -d(u), d(f), 1]);
+}
+
+// `b`, given in the frame of pose `a`, as a pose in `a`'s parent.
+function compose(a, b) {
+  const r = qrot(a.q, b.p);
+  return { p: [a.p[0] + r[0], a.p[1] + r[1], a.p[2] + r[2]], q: qmul(a.q, b.q) };
+}
+
+// A track's pose at `ms`, between its two nearest samples, or null outside it.
+function poseAt(track, ms) {
+  if (!track || !track.t_ms.length) return null;
+  const ts = track.t_ms, P = track.pose;
+  if (ms < ts[0] - 100 || ms > ts[ts.length - 1] + 100) return null;
+  const i = frameAt(ts, ms), j = Math.min(i + 1, ts.length - 1);
+  const k = j === i ? 0 : Math.min(Math.max((ms - ts[i]) / (ts[j] - ts[i]), 0), 1);
+  const a = P.slice(i * 7, i * 7 + 7), b = P.slice(j * 7, j * 7 + 7);
+  // The short way round: q and -q are one rotation.
+  const sign = a[3] * b[3] + a[4] * b[4] + a[5] * b[5] + a[6] * b[6] < 0 ? -1 : 1;
+  const q = [0, 1, 2, 3].map((n) => a[3 + n] * (1 - k) + sign * b[3 + n] * k);
+  const qn = Math.hypot(...q) || 1;
+  return { p: [0, 1, 2].map((n) => a[n] * (1 - k) + b[n] * k), q: q.map((v) => v / qn) };
+}
+
+// --- meshes ------------------------------------------------------------------
+
+// Binary STL to interleaved position + normal. The normals are recomputed from
+// the winding: an STL's stored normal is allowed to be zero.
+function fromStl(buf) {
+  const dv = new DataView(buf), n = dv.getUint32(80, true);
+  const tris = [];
+  for (let i = 0; i < n; i++) {
+    const o = 84 + i * 50, f = (k) => dv.getFloat32(o + 12 + k * 4, true);
+    tris.push([[f(0), f(1), f(2)], [f(3), f(4), f(5)], [f(6), f(7), f(8)]]);
+  }
+  return interleave(tris);
+}
+function interleave(tris) {
+  const out = new Float32Array(tris.length * 18);
+  tris.forEach(([a, b, c], i) => {
+    const nrm = norm3(cross3(sub3(b, a), sub3(c, a)));
+    [a, b, c].forEach((v, k) => out.set([...v, ...nrm], i * 18 + k * 6));
+  });
+  return out;
+}
+
+// The headset. Meta publishes no headset CAD, so this is a stand-in at the
+// Quest 3's published size, a rounded visor and the band, accurate to a
+// centimetre or two. Authored in the
+// OpenXR VIEW frame: origin between the eyes, +x right, +y up, -z forward.
+function hmdMesh() {
+  const VW = 0.092, VH = 0.049, VR = 0.034, Z_BACK = -0.012, Z_FRONT = -0.072;
+  const BAND_RX = 0.088, BAND_Z0 = 0.045, BAND_RZ = 0.115, BAND_H = 0.016, BAND_Y = 0.004;
+  const tris = [];
+  const quad = (a, b, c, d) => tris.push([a, b, c], [a, c, d]);
+  const outline = (inset) => {
+    const w = VW - inset, h = VH - inset, r = Math.max(0.004, VR - inset), pts = [];
+    for (const [cx, cy, a0] of [[w - r, h - r, 0], [-(w - r), h - r, Math.PI / 2],
+                                [-(w - r), -(h - r), Math.PI], [w - r, -(h - r), 1.5 * Math.PI]]) {
+      for (let k = 0; k <= 8; k++) {
+        const a = a0 + (k / 8) * (Math.PI / 2);
+        pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+      }
+    }
+    return pts;
+  };
+  const prism = (ring, z0, z1) => {
+    const n = ring.length;
+    for (let i = 0; i < n; i++) {
+      const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % n];
+      quad([x0, y0, z0], [x1, y1, z0], [x1, y1, z1], [x0, y0, z1]);
+    }
+    for (let i = 1; i < n - 1; i++) {
+      tris.push([[...ring[0], z1], [...ring[i], z1], [...ring[i + 1], z1]]);
+      tris.push([[...ring[0], z0], [...ring[i + 1], z0], [...ring[i], z0]]);
+    }
+  };
+  prism(outline(0), Z_FRONT, Z_BACK);
+  prism(outline(0.012), Z_BACK, Z_BACK + 0.014);
+  const a0 = Math.acos(Math.max(-1, Math.min(1, (Z_BACK + 0.004 - BAND_Z0) / BAND_RZ)));
+  const at = (a) => [BAND_RX * Math.sin(a), BAND_Z0 + BAND_RZ * Math.cos(a)];
+  for (let k = 0; k < 32; k++) {
+    const [x0, z0] = at(a0 - (2 * a0 * k) / 32), [x1, z1] = at(a0 - (2 * a0 * (k + 1)) / 32);
+    quad([x0, BAND_Y - BAND_H, z0], [x1, BAND_Y - BAND_H, z1], [x1, BAND_Y + BAND_H, z1], [x0, BAND_Y + BAND_H, z0]);
+  }
+  return interleave(tris);
+}
+
+// --- the 3D view -------------------------------------------------------------
+//
+// Z up, in `quest_origin`: the headset's stage space, so z = 0 is the floor.
+
+const SIDES = ["left", "right"];
+const COLOUR = { left: [0.34, 0.78, 0.63, 1], right: [0.88, 0.66, 0.19, 1] };
+const SHELL = [0.62, 0.64, 0.68, 1];
+const TRAILS = [["left_hand_root", COLOUR.left], ["right_hand_root", COLOUR.right], ["hmd", SHELL]];
+
+// Every mesh, by name, once it has arrived; `redraw` once it has.
+const MESH = { hmd: hmdMesh() };
+for (const f of ["left.stl", "right.stl", ...SIDES.flatMap((s) =>
+  [`hand_${s}_left_finger_link.STL`, `hand_${s}_right_finger_link.STL`])]) {
+  fetch("/meshes/" + f).then((r) => r.arrayBuffer()).then((b) => { MESH[f] = fromStl(b); redraw(); }).catch(() => {});
+}
+const redraw = () => { scene.draw(); drawOverlays(true); };
+
+// The rig at one instant, as `[mesh, model matrix, colour]`.
+function rig(at) {
+  const out = [];
+  const head = at("hmd");
+  if (head) out.push(["hmd", model(head.p, qmul(head.q, W)), SHELL]);
+  for (const side of SIDES) {
+    const ctrl = at(side + "_controller");
+    // The shell is authored in the OpenXR grip frame of the raw pose.
+    if (ctrl) out.push([side + ".stl", model(ctrl.p, qmul(ctrl.q, W)), SHELL]);
+    const recorded = at(side + "_hand_root");
+    if (!recorded) continue;
+    const root = CAL ? compose(recorded, CAL.root_fix[side]) : recorded;
+    // A finger link is recorded relative to its hand root, as Rz(±q) about
+    // its hinge, and its mesh is in the link's own frame.
+    for (const finger of ["left", "right"]) {
+      const rel = at(`${side}_${finger}_finger_link`);
+      if (!rel) continue;
+      const s = finger === "left" ? 1 : -1, e = CAL ? CAL.encoder[side] : { k: 1, q0: 0 };
+      const a = s * (e.k * s * 2 * Math.atan2(rel.q[2], rel.q[3]) + e.q0);
+      const link = compose(root, { p: rel.p, q: [0, 0, Math.sin(a / 2), Math.cos(a / 2)] });
+      out.push([`hand_${side}_${finger}_finger_link.STL`, model(link.p, link.q), COLOUR[side]]);
+    }
+  }
+  return out;
+}
+
+function program(gl, vs, fs) {
+  const prog = gl.createProgram();
+  for (const [kind, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+    const s = gl.createShader(kind);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    gl.attachShader(prog, s);
+  }
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+  const loc = {};
+  for (const a of ["a_p", "a_n"]) loc[a] = gl.getAttribLocation(prog, a);
+  return { prog, loc, u: (name) => gl.getUniformLocation(prog, name) };
+}
+
+// A headlight, and `abs` because the finger meshes are open shells: a jaw
+// seen from behind is lit rather than black. `v_ok` below 1 is a fragment
+// the vertex shader could not place.
+const SHADE = `
+  precision mediump float;
+  varying vec3 v_n; varying float v_ok;
+  uniform vec4 u_color; uniform vec3 u_light; uniform float u_lit;
+  void main() {
+    if (v_ok < 0.999) discard;
+    float d = abs(dot(normalize(v_n), u_light));
+    gl_FragColor = vec4(u_color.rgb * mix(1.0, 0.3 + 0.7 * d, u_lit), u_color.a);
+  }`;
+
+// One GL context's copy of each mesh, uploaded on first use.
+function buffers(gl) {
+  const bufs = {};
+  return (name) => {
+    if (!bufs[name] && MESH[name]) {
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, MESH[name], gl.STATIC_DRAW);
+      bufs[name] = { buf, count: MESH[name].length / 6 };
+    }
+    return bufs[name];
+  };
+}
+
+const scene = (() => {
+  const canvas = $("gl");
+  const gl = canvas.getContext("webgl", { antialias: true });
+  const note = (msg) => { $("gl-note").hidden = !msg; text($("gl-note"), msg || ""); };
+  if (!gl) {
+    note("no 3D: this browser has no WebGL");
+    return { load() {}, draw() {} };
+  }
+  const { loc: a, u } = program(gl, `
+    attribute vec3 a_p; attribute vec3 a_n;
+    uniform mat4 u_vp; uniform mat4 u_model;
+    varying vec3 v_n; varying float v_ok;
+    void main() { v_ok = 1.0; v_n = (u_model * vec4(a_n, 0.0)).xyz; gl_Position = u_vp * u_model * vec4(a_p, 1.0); }`, SHADE);
+  const loc = {
+    p: a.a_p, n: a.a_n, vp: u("u_vp"), model: u("u_model"),
+    color: u("u_color"), light: u("u_light"), lit: u("u_lit"),
+  };
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  const IDENTITY = model([0, 0, 0], [0, 0, 0, 1]);
+  const meshBuf = buffers(gl);
+
+  const drawMesh = (name, m, color) => {
+    const mesh = meshBuf(name);
+    if (!mesh) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buf);
+    gl.enableVertexAttribArray(loc.n);
+    gl.vertexAttribPointer(loc.p, 3, gl.FLOAT, false, 24, 0);
+    gl.vertexAttribPointer(loc.n, 3, gl.FLOAT, false, 24, 12);
+    gl.uniformMatrix4fv(loc.model, false, m);
+    gl.uniform4fv(loc.color, color);
+    gl.uniform1f(loc.lit, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+  };
+  const lineBuf = gl.createBuffer();
+  // Positions only, xyz per vertex; `mode` is LINES or LINE_STRIP.
+  const drawLines = (data, mode, color, buf = lineBuf, first = 0, count = data ? data.length / 3 : 0) => {
+    if (!count) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    if (data) gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+    gl.disableVertexAttribArray(loc.n);
+    gl.vertexAttrib3f(loc.n, 0, 0, 1);
+    gl.vertexAttribPointer(loc.p, 3, gl.FLOAT, false, 12, 0);
+    gl.uniformMatrix4fv(loc.model, false, IDENTITY);
+    gl.uniform4fv(loc.color, color);
+    gl.uniform1f(loc.lit, 0);
+    gl.drawArrays(mode, first, count);
+  };
+  gl.enableVertexAttribArray(loc.p);
+
+  // Per episode: the trails as static buffers, the floor grid, and where the
+  // camera starts.
+  let poses = {}, trails = [], grid = null, home = null;
+  const cam = { az: 0, el: 0.5, dist: 2, target: [0, 0, 1] };
+
+  // `reframe` once per source: a live view reloads its trails at every
+  // sample, and must not snap the camera back each time.
+  function load(p, reframe) {
+    poses = p;
+    for (const tr of trails) gl.deleteBuffer(tr.buf);
+    trails = TRAILS.filter(([name]) => p[name]).map(([name, color]) => {
+      const P = p[name].pose, n = P.length / 7, xyz = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) xyz.set(P.slice(i * 7, i * 7 + 3), i * 3);
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, xyz, gl.STATIC_DRAW);
+      return { name, color, buf, xyz, ts: p[name].t_ms };
+    });
+    note(trails.length || mode === "live" ? "" : "no poses in this episode");
+    if (!reframe && home) return draw();
+    // Frame the hands: their trails' bounding box, seen from over the
+    // operator's shoulder. Straight from behind, the headset hides them.
+    let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const tr of trails.filter((tr) => tr.name !== "hmd")) for (let i = 0; i < tr.xyz.length; i++) {
+      lo[i % 3] = Math.min(lo[i % 3], tr.xyz[i]);
+      hi[i % 3] = Math.max(hi[i % 3], tr.xyz[i]);
+    }
+    if (!isFinite(lo[0])) { lo = [-1, -1, 0]; hi = [1, 1, 1.5]; }
+    const centre = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
+    const radius = Math.max(0.3, Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2);
+    const head = poseAt(p.hmd, p.hmd ? p.hmd.t_ms[0] : 0);
+    const facing = head ? qrot(qmul(head.q, W), [0, 0, -1]) : [1, 0, 0];
+    home = { az: Math.atan2(-facing[1], -facing[0]) + 0.6, el: 0.85, dist: radius * 3.2, target: centre };
+    Object.assign(cam, home, { target: [...centre] });
+    // A floor grid under the work, on a step of 1, 2 or 5 times a power of
+    // ten so it reads as a ruler.
+    const span = Math.max(hi[0] - lo[0], hi[1] - lo[1], 1) + 1;
+    const raw = span / 8, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const stepM = (raw / mag < 1.5 ? 1 : raw / mag < 3.5 ? 2 : raw / mag < 7.5 ? 5 : 10) * mag;
+    const g = [], x0 = Math.floor((centre[0] - span / 2) / stepM) * stepM, y0 = Math.floor((centre[1] - span / 2) / stepM) * stepM;
+    const x1 = x0 + Math.ceil(span / stepM) * stepM, y1 = y0 + Math.ceil(span / stepM) * stepM;
+    for (let x = x0; x <= x1 + 1e-9; x += stepM) g.push(x, y0, 0, x, y1, 0);
+    for (let y = y0; y <= y1 + 1e-9; y += stepM) g.push(x0, y, 0, x1, y, 0);
+    grid = new Float32Array(g);
+    draw();
+  }
+
+  let pending = false;
+  function draw() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(render);
+  }
+
+  function render() {
+    pending = false;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+    if (!w || !h) return;
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0.051, 0.059, 0.071, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    const at = (name) => poseAt(poses[name], now());
+    if ($("follow").checked) {
+      const pts = ["left_hand_root", "right_hand_root"].map(at).filter(Boolean);
+      if (pts.length) cam.target = [0, 1, 2].map((k) => pts.reduce((s, p) => s + p.p[k], 0) / pts.length);
+    }
+    const ce = Math.cos(cam.el);
+    const eye = [cam.target[0] + cam.dist * ce * Math.cos(cam.az), cam.target[1] + cam.dist * ce * Math.sin(cam.az),
+                 cam.target[2] + cam.dist * Math.sin(cam.el)];
+    gl.uniformMatrix4fv(loc.vp, false, mul(perspective(0.8, w / h, 0.01, 100), lookAt(eye, cam.target, [0, 0, 1])));
+    gl.uniform3fv(loc.light, norm3(sub3(cam.target, eye)));
+
+    if (grid) drawLines(grid, gl.LINES, [1, 1, 1, 0.08]);
+    drawLines(new Float32Array([0, 0, 0, 0.2, 0, 0]), gl.LINES, [1, 0.37, 0.34, 1]);
+    drawLines(new Float32Array([0, 0, 0, 0, 0.2, 0]), gl.LINES, [0.3, 0.86, 0.44, 1]);
+    drawLines(new Float32Array([0, 0, 0, 0, 0, 0.2]), gl.LINES, [0.36, 0.62, 1, 1]);
+    // Each trail whole and faint, then bright up to the playhead.
+    for (const tr of trails) {
+      const n = tr.xyz.length / 3;
+      drawLines(null, gl.LINE_STRIP, [...tr.color.slice(0, 3), 0.18], tr.buf, 0, n);
+      drawLines(null, gl.LINE_STRIP, [...tr.color.slice(0, 3), 0.9], tr.buf, 0, now() < tr.ts[0] ? 0 : frameAt(tr.ts, now()) + 1);
+    }
+
+    for (const [name, m, color] of rig(at)) drawMesh(name, m, color);
+    for (const side of SIDES) {
+      const root = at(side + "_hand_root");
+      if (!root) continue;
+      // The hand root's axes, so which way a hand faced reads at a glance.
+      const axes = [];
+      for (const v of [[0.06, 0, 0], [0, 0.06, 0], [0, 0, 0.06]]) {
+        const e = qrot(root.q, v);
+        axes.push(...root.p, root.p[0] + e[0], root.p[1] + e[1], root.p[2] + e[2]);
+      }
+      drawLines(new Float32Array(axes.slice(0, 6)), gl.LINES, [1, 0.37, 0.34, 1]);
+      drawLines(new Float32Array(axes.slice(6, 12)), gl.LINES, [0.3, 0.86, 0.44, 1]);
+      drawLines(new Float32Array(axes.slice(12, 18)), gl.LINES, [0.36, 0.62, 1, 1]);
+    }
+  }
+
+  // Orbit, pan and zoom.
+  let drag = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button !== 0 };
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    if (drag.pan) {
+      const s = cam.dist * 0.0015;
+      const right = [-Math.sin(cam.az), Math.cos(cam.az), 0];
+      const up = [-Math.sin(cam.el) * Math.cos(cam.az), -Math.sin(cam.el) * Math.sin(cam.az), Math.cos(cam.el)];
+      for (let k = 0; k < 3; k++) cam.target[k] += (-dx * right[k] + dy * up[k]) * s;
+      $("follow").checked = false;
+    } else {
+      cam.az -= dx * 0.008;
+      cam.el = Math.min(1.55, Math.max(-1.55, cam.el + dy * 0.008));
+    }
+    draw();
+  });
+  canvas.addEventListener("pointerup", () => { drag = null; });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    cam.dist = Math.min(50, Math.max(0.05, cam.dist * Math.exp(e.deltaY * 0.001)));
+    draw();
+  }, { passive: false });
+  const reset = () => { if (home) Object.assign(cam, home, { target: [...home.target] }); draw(); };
+  canvas.addEventListener("dblclick", reset);
+  $("reset").onclick = reset;
+  $("follow").onchange = draw;
+  return { load, draw };
+})();
+
+// --- the camera overlays -----------------------------------------------------
+//
+// The rig drawn into each camera's own picture, which checks the pose,
+// the mount, the jaw angle and the camera model together.
+//
+// The lenses and mounts come from `GET /camera-calibration/<left>-<right>`
+// for the episode's grippers (`record::camera_calib`, which says what each
+// value means): a fit saved on the headset for these grippers, or the
+// built-in `assets/calib/default.json`.
+//
+// A lens is equidistant: `r = f·θ·(1 + k1·θ² + k2·θ⁴)`, centred on `c`. Past
+// `theta_max`, where `r` reaches the image circle, the polynomial is not
+// trusted. A wrist camera sits at `X_cam = q·(X − t)` in
+// `*_hand_cam_link`, which is the fixed hand_root moved 42.6 mm along its z
+// (yubi URDF `*_camera_joint`).
+let CAL = null;
+// A take's gripper pair as the calibration routes name it (`camera_calib::store::id`),
+// or the newest calibration when its meta.json names none.
+function calibrationId(meta) {
+  const id = (role) => ((meta && meta.devices || []).find((d) => d.role === role) || {}).id;
+  const [l, r] = [id("gripper_left"), id("gripper_right")];
+  const clean = (s) => s.replace(/[^A-Za-z0-9_]/g, "-");
+  return l && r ? clean(l) + "-" + clean(r) : "latest";
+}
+async function loadCalibration(id) {
+  try { CAL = await (await api("/camera-calibration/" + id)).json(); } catch (e) { CAL = null; }
+  drawOverlays(true);
+  scene.draw();
+}
+const ELP_W = 640, ELP_H = 480;
+const CAM_LINK_Z = 0.0426;
+// For a calibration that carries no delays: 0, as in `assets/calib/default.json`.
+const ELP_LATE_MS = 0;
+const ENCODER_LATE_MS = 0;
+// How long a wrist frame is stamped after its exposure.
+const wristLate = (name) => (CAL && CAL.wrist_late_ms ? CAL.wrist_late_ms[name] : ELP_LATE_MS);
+
+// `name` is a wrist camera.
+function overlayView(canvas, name) {
+  const gl = canvas.getContext("webgl", { antialias: true });
+  if (!gl) return null;
+  // A triangle with a corner past `theta_max` is dropped whole by `v_ok`,
+  // and edges are straight in the image: fine at the size of these meshes.
+  // So is one nearer than 12 mm: the lens sits in the body's camera bore, whose
+  // walls reach 10 mm ahead of it, and nothing else on the body is nearer than 20 mm.
+  const { loc: a, u } = program(gl, `
+    attribute vec3 a_p; attribute vec3 a_n;
+    uniform mat4 u_view; uniform mat4 u_model;
+    uniform vec3 u_lens; uniform vec2 u_c; uniform vec2 u_size; uniform float u_thmax;
+    varying vec3 v_n; varying float v_ok;
+    void main() {
+      vec3 c = (u_view * u_model * vec4(a_p, 1.0)).xyz;
+      v_n = (u_view * u_model * vec4(a_n, 0.0)).xyz;
+      float n = length(c.xy), th = atan(n, c.z), t2 = th * th;
+      float r = u_lens.x * th * (1.0 + t2 * (u_lens.y + t2 * u_lens.z));
+      vec2 px = u_c + (n > 1e-9 ? r / n : 0.0) * c.xy;
+      v_ok = th <= u_thmax && length(c) > 0.012 ? 1.0 : 0.0;
+      // Depth is the range: under a fisheye a point beside the lens is in view.
+      gl_Position = vec4(px.x / u_size.x * 2.0 - 1.0, 1.0 - px.y / u_size.y * 2.0,
+                         min(length(c) / 4.0, 1.0) * 2.0 - 1.0, 1.0);
+    }`, SHADE);
+  gl.uniform2f(u("u_size"), ELP_W, ELP_H);
+  gl.uniform3f(u("u_light"), 0, 0, 1);
+  gl.uniform1f(u("u_lit"), 1);
+  const U = { view: u("u_view"), model: u("u_model"), color: u("u_color") };
+  gl.enable(gl.DEPTH_TEST);
+  gl.enableVertexAttribArray(a.a_p);
+  gl.enableVertexAttribArray(a.a_n);
+  const meshBuf = buffers(gl);
+  const conj = (q) => [-q[0], -q[1], -q[2], q[3]];
+  const neg = (v) => [-v[0], -v[1], -v[2]];
+
+  // `t`: the instant the picture under this canvas shows, in take ms.
+  return (t) => {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (!$("overlay").checked || t === null || !CAL) return;
+    const lens = CAL.wrist[name];
+    // A wrist's own jaws are as the encoder read them, `encoder_late_ms`
+    // after the poses; everything else is at the camera's own lag.
+    const own = (track) => track.startsWith(name + "_") && track.endsWith("_finger_link");
+    const camLate = wristLate(name);
+    const jawLate = camLate - (CAL.encoder_late_ms ? CAL.encoder_late_ms[name] : ENCODER_LATE_MS);
+    const at = (track) => poseAt(player.poses[track],
+      t - (own(track) ? jawLate : camLate));
+    // The frame the camera is mounted in: the wrist's camera link.
+    const root = at(name + "_hand_root");
+    const carrier = root && compose(compose(root, CAL.root_fix[name]), { p: [0, 0, CAM_LINK_Z], q: [0, 0, 0, 1] });
+    if (!carrier) return;
+    const qi = conj(carrier.q), fromWorld = model(neg(qrot(qi, carrier.p)), qi);
+    const parts = rig(at).filter(([mesh]) => mesh !== "hmd");
+    gl.uniform3f(u("u_lens"), lens.f, lens.k1, lens.k2);
+    gl.uniform2f(u("u_c"), ...lens.c);
+    gl.uniform1f(u("u_thmax"), lens.theta_max);
+    const mount = model(neg(qrot(lens.mount.q, lens.mount.t)), lens.mount.q);
+    gl.uniformMatrix4fv(U.view, false, mul(mount, fromWorld));
+    for (const [mesh, m, color] of parts) {
+      const buf = meshBuf(mesh);
+      if (!buf) continue;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf.buf);
+      gl.vertexAttribPointer(a.a_p, 3, gl.FLOAT, false, 24, 0);
+      gl.vertexAttribPointer(a.a_n, 3, gl.FLOAT, false, 24, 12);
+      gl.uniformMatrix4fv(U.model, false, m);
+      gl.uniform4fv(U.color, color);
+      gl.drawArrays(gl.TRIANGLES, 0, buf.count);
+    }
+  };
+}
+
+// Each overlay at the frame its own camera presents, and only when that
+// moved, unless `force`.
+function drawOverlays(force) {
+  for (const c of player.cams) {
+    const t = c.presented ?? player.t;
+    if (!force && t === c.drawn) continue;
+    c.drawn = t;
+    if (c.overlay) c.overlay(t);
+  }
+}
+$("overlay").onchange = () => drawOverlays(true);
+$("whole").onchange = () => {
+  if (mode !== "episode" || !player.plot) return;
+  [player.start, player.end] = $("whole").checked ? player.whole : player.trimmed;
+  player.plot.t0 = player.start;
+  player.plot.t1 = player.end;
+  drawPlot(player.plot);
+  seek(player.t);
+};
+
+// Not only the window: a camera tile takes its picture's aspect once the
+// video says it, which resizes the 3D view below it.
+const resized = new ResizeObserver(() => {
+  drawPlot(mode === "live" ? livePlot() : player.plot);
+  scene.draw();
+  drawOverlays(true);
+});
+for (const el of [$("gl"), $("plot"), $("cams")]) resized.observe(el);
+
+// --- live --------------------------------------------------------------------
+//
+// The same tracks as a recorded take, grown from the newest samples and cut
+// to the last `LIVE_WINDOW`, so the scene and the plot cannot tell the two
+// apart.
+const LIVE_WINDOW = 10000;
+const LIVE_FPS = 30;
+// How soon a dropped camera stream is asked for again. Chosen by hand.
+const LIVE_RETRY_MS = 2000;
+// How long the poses stream may be quiet before the view says the headset
+// is not answering. It sends 30 times a second, 10 while recording, so 2 s
+// is at least 20 missed messages. Chosen by hand.
+const LIVE_QUIET_MS = 2000;
+const live = { watch: null, heard: 0, es: null, t: 0, poses: {}, grippers: null, imgs: [], caps: {}, rates: null, framed: false, recording: null, fits: [], opening: 0 };
+
+function livePlot() {
+  return { grippers: live.grippers.filter((g) => g.t_ms.length), marks: [], t0: live.t - LIVE_WINDOW, t1: live.t };
+}
+
+// The connections go; the tiles stay, for `startLive` to reopen.
+function stopLive() {
+  if (live.es) live.es.close();
+  // An `<img>` keeps its MJPEG connection until its source goes.
+  for (const img of live.imgs) img.removeAttribute("src");
+  live.es = null;
+  clearInterval(live.rates);
+  live.rates = null;
+  clearInterval(live.watch);
+  live.watch = null;
+}
+
+function closeLive() {
+  stopLive();
+  for (const fit of live.fits) clearInterval(fit);
+  live.fits = [];
+  live.imgs = [];
+  live.caps = {};
+}
+
+async function openLive() {
+  closeEpisode();
+  mode = "live";
+  loadCalibration("latest");
+  current = "live";
+  $("empty").hidden = true;
+  $("ep").hidden = false;
+  for (const id of ["ep-actions", "transport", "keys"]) $(id).hidden = true;
+  text($("ep-label"), "Live");
+  text($("ep-sub"), "");
+  gripperValues(null);
+  Object.assign(live, { t: 0, poses: {}, framed: false, recording: null,
+    grippers: ["left", "right"].map((name) => ({ name, t_ms: [], position: [] })) });
+  // Only the cameras that are delivering, which `/state` already knows.
+  let s = null;
+  // A leave and a return during the await start a second open, and only the
+  // newest may add tiles.
+  const run = ++live.opening;
+  try { s = await (await api("/state")).json(); } catch (e) { /* every camera, then */ }
+  if (current !== "live" || run !== live.opening) return;
+  const delivering = (name) => !s || s.sources.some((src) => src.name === sourceName(name) && src.preview);
+  const names = ["left", "right", "head"].filter(delivering);
+  if (!names.length) $("cams").textContent = "no camera is delivering";
+  for (const name of names) {
+    const fig = document.createElement("figure");
+    const frame = document.createElement("div");
+    frame.className = "frame";
+    const img = document.createElement("img");
+    // A multipart image fires `load` once at most, so the tile takes its
+    // aspect from the first frame through a short poll instead.
+    const cap = document.createElement("figcaption");
+    cap.textContent = CAPTION[name];
+    live.caps[name] = cap;
+    const fit = setInterval(() => {
+      if (!img.naturalWidth) return;
+      delete img.dataset.wait;
+      frame.style.aspectRatio = img.naturalWidth + " / " + img.naturalHeight;
+      fig.style.flexGrow = String(img.naturalWidth / img.naturalHeight);
+      fig.style.setProperty("--aspect", img.naturalWidth / img.naturalHeight);
+      clearInterval(fit);
+    }, 200);
+    live.fits.push(fit);
+    frame.append(img);
+    fig.append(frame, cap);
+    $("cams").append(fig);
+    img.dataset.src = "/live/" + name + ".mjpeg?fps=" + LIVE_FPS;
+    // A dropped stream fires `error` and leaves the tile on its last frame.
+    // The query changes so the browser asks again instead of reusing it.
+    img.onerror = () => {
+      img.dataset.wait = "reconnecting";
+      setTimeout(() => {
+        if (live.es && live.imgs.includes(img)) img.src = img.dataset.src + "&n=" + Date.now();
+      }, LIVE_RETRY_MS);
+    };
+    // Once per stream, at its first frame.
+    img.onload = () => delete img.dataset.wait;
+    live.imgs.push(img);
+  }
+  if (s) liveRates(s);
+  startLive();
+}
+
+function startLive() {
+  if (mode !== "live" || live.es) return;
+  for (const img of live.imgs) {
+    img.dataset.wait = "connecting";
+    img.src = img.dataset.src;
+  }
+  live.es = new EventSource("/live/poses");
+  live.es.onmessage = (e) => liveSample(JSON.parse(e.data));
+  live.heard = performance.now();
+  live.watch = setInterval(liveWatch, 500);
+  live.rates = setInterval(async () => {
+    try { liveRates(await (await api("/state")).json()); } catch (e) { /* the next poll, then */ }
+  }, 2000);
+}
+
+// A link that stalls without dropping fires no error, so the poses stream's
+// silence is what says the headset is not answering.
+function liveWatch() {
+  const quiet = performance.now() - live.heard;
+  const lost = quiet >= LIVE_QUIET_MS;
+  text($("ep-sub"), lost ? fill("no answer from the headset for {n} s", { n: Math.floor(quiet / 1000) }) : "");
+  for (const img of live.imgs) {
+    const wait = img.dataset.wait;
+    shade(img.parentElement, lost ? "no answer from the headset" : wait ? wait : null);
+  }
+}
+
+// The rate the camera delivers to the headset, not the preview's capped one.
+function liveRates(s) {
+  for (const [name, cap] of Object.entries(live.caps)) {
+    const src = s.sources.find((x) => x.name === sourceName(name));
+    if (!src) continue;
+    cap.textContent = [CAPTION[name], src.width + "×" + src.height, src.hz.toFixed(1) + " Hz"].join("  ");
+  }
+}
+
+function liveSample(d) {
+  live.heard = performance.now();
+  live.t = d.t_ms;
+  const cut = (tr) => {
+    const k = tr.t_ms.findIndex((ms) => ms >= live.t - LIVE_WINDOW);
+    if (k > 0) {
+      tr.t_ms.splice(0, k);
+      (tr.pose || tr.position).splice(0, tr.pose ? k * 7 : k);
+    }
+  };
+  for (const [name, pose] of Object.entries(d.poses)) {
+    const tr = live.poses[name] || (live.poses[name] = { t_ms: [], pose: [] });
+    tr.t_ms.push(d.t_ms);
+    tr.pose.push(...pose);
+  }
+  for (const tr of Object.values(live.poses)) cut(tr);
+  d.grippers.forEach((angle, side) => {
+    const g = live.grippers[side];
+    if (angle !== null) { g.t_ms.push(d.t_ms); g.position.push(angle); }
+    cut(g);
+  });
+  scene.load(live.poses, !live.framed && Object.keys(live.poses).length > 0);
+  live.framed = live.framed || Object.keys(live.poses).length > 0;
+  drawPlot(livePlot());
+  cursor(null);
+  if (d.recording !== live.recording) {
+    live.recording = d.recording;
+    text($("live-state"), (d.recording ? "recording" : "idle"));
+    $("live-state").className = d.recording ? "rec" : "dim";
+  }
+}
+
+// A page nobody is looking at asks the headset for nothing.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopLive();
+  else startLive();
+});
+
+// --- boot ----------------------------------------------------------------------
+
+text($("pull-cmd"), "curl -s " + location.origin + "/pull.py | python3 - " + location.origin + " episodes");
+// Framed by the console's Viewer tab, whose header already names the page
+// and leads back to it.
+if (window.top !== window) document.querySelector(".side-head").hidden = true;
+
+// The sidebar's width, kept across visits. Capped so the episode keeps most of
+// the window.
+function setSide(px) {
+  const w = Math.round(Math.min(Math.max(px, 200), innerWidth * 0.6));
+  document.body.style.setProperty("--side", w + "px");
+  return w;
+}
+try { const w = Number(localStorage.getItem("side-width")); if (w) setSide(w); } catch (e) {}
+$("side-resize").onpointerdown = (e) => {
+  e.preventDefault();
+  const grip = e.currentTarget;
+  grip.setPointerCapture(e.pointerId);
+  grip.classList.add("dragging");
+  grip.onpointermove = (m) => setSide(m.clientX);
+  grip.onpointerup = (u) => {
+    grip.onpointermove = grip.onpointerup = null;
+    grip.classList.remove("dragging");
+    try { localStorage.setItem("side-width", setSide(u.clientX)); } catch (e) {}
+  };
+};
+(async () => {
+  await loadList();
+  loadExports();
+})();
+// A new take shows up without a reload: every 10 s, because the listing
+// stats every file. The period is chosen by hand.
+setInterval(loadList, 10000);
+</script>
+</body>
+</html>

@@ -1,0 +1,1451 @@
+<!doctype html>
+<!--
+  The side interface, served by the headset itself.
+
+  Self-contained on purpose: the rig network routinely has no internet and this
+  page is served by a Quest sitting on it, so a CDN reference is a blank page.
+  No framework, no build step, no fetch to anywhere but this device.
+
+  It is an OPTIONAL CONVENIENCE. Nothing here is required to record: a headset
+  nobody has opened this page against collects exactly the same episodes.
+
+  **Anyone on the rig network may look and change.** The panel shows a QR code
+  pointing here. A standalone rig has no dashboard, so this is where it is set
+  up: the task, the cameras, the configuration and the episodes.
+  Start / stop / mark-failed are not here: those are the headset's gestures
+  alone, and this page adds no second way to trigger them.
+
+  **It is a substitute for LOOKING into the headset.** During collection both
+  hands are in the grippers, so checking the headset panel is awkward. So a phone — on a bench, or
+  strapped to an arm — has to be able to answer everything the panel answers.
+  That is why the order below is readiness first and video last.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- `viewport-fit=cover` so a landscape phone uses the full width and the
+     insets below keep text out of the notch. `user-scalable` is left alone
+     deliberately: pinching a status page is somebody's fix for a display they
+     cannot read, and taking it away to tidy a layout is a poor trade. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14161a">
+<title>YUBI Go Console</title>
+<style>
+  /* Phone first. The operator is standing at a rig holding a handset — or
+     wearing one on an armband — not sitting at a desk. So the narrow layout is
+     the design and the wide one is the enhancement, rather than the other way
+     round. */
+  :root {
+    --bg: #14161a; --card: #1d2026; --line: #2c313a;
+    --fg: #e6e8ec; --dim: #98a0ae; --accent: #57c7a0; --alert: #e2685f;
+    --warn: #e0a830;
+    /* The band's own badge colour, `#rec` in `assets/ui/panel.svg`. A take is not a
+       fault and not a health reading, so it is neither `--alert` nor
+       `--accent`: it is the one thing on this page the headset already draws
+       in a colour of its own, and the two surfaces have to agree. */
+    --rec: #e63c3c;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  /* Rig fits without a scroll and Setup does not, so a classic scrollbar
+     would shift the header sideways on every tab switch. */
+  html { scrollbar-gutter: stable; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-size: 16px; line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+  }
+  header {
+    position: sticky; top: 0; z-index: 2; background: var(--bg);
+    padding: 12px 14px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .04em; }
+  main { padding: 14px; display: grid; gap: 14px; }
+  /* **The view is the grid item, so it needs its own grid.** Without this
+     the sections inside it butt against each other: `main`'s gap spaces the
+     views, not their sections. */
+  .view { display: grid; gap: 14px; align-content: start; }
+  /* **`display` here beats the UA's `[hidden] { display: none }`**, so without
+     this the tabs stop hiding anything and all three views stack into one long
+     page — which is the whole thing the tabs exist to stop. Any rule that sets
+     `display` on an element that is also `hidden` owes it this line. */
+  .view[hidden] { display: none; }
+  /* Rig's two columns exist only on a wide screen. Narrower, their panels
+     join the view's own stack: the readings, then the sweep, then the
+     provisioning facts. */
+  #v-rig > .col { display: contents; }
+  #sec-calib { order: 1; }
+  #sec-device { order: 2; }
+  /* Keep text out of the notch and off the rounded corners in landscape,
+     where the inset is on the side rather than the top. */
+  header, main { padding-left: max(14px, env(safe-area-inset-left));
+                 padding-right: max(14px, env(safe-area-inset-right)); }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  h2 { font-size: 13px; margin: 0 0 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+  .dim { color: var(--dim); }
+  .ok { color: var(--accent); }
+  .bad { color: var(--alert); }
+  .warn { color: var(--warn); }
+  .idle { color: var(--dim); }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 13px; }
+
+  /* --- is it recording ----------------------------------------------------
+     **The one state on the page that has to be readable without being read.**
+     About to record and recording are the two states an operator most needs
+     to tell apart, and this page is read at arm's length.
+
+     So the difference is not a colour swap: recording is a *filled* badge with
+     a blinking dot, the band's badge in the band's colour, and everything else
+     is a hollow outline. Fill against outline survives sunlight, a phone at
+     the far end of a bench, and whatever the handset's colour profile does. */
+  .recstate {
+    display: inline-flex; align-items: center; gap: .5em; flex: none;
+    font-weight: 700; letter-spacing: .06em; white-space: nowrap;
+  }
+  .recstate .dot { width: .62em; height: .62em; border-radius: 50%; flex: none; }
+  .recstate.on {
+    background: var(--rec); border-color: var(--rec); color: #fff;
+  }
+  .recstate.on .dot { background: #fff; animation: rec-blink 1.4s steps(1, end) infinite; }
+  /* Hollow, dim, and the dot is an empty ring: not recording is the absence of
+     the badge's ink, which is a stronger signal than a different word in it. */
+  .recstate.off { color: var(--dim); }
+  .recstate.off .dot { box-shadow: inset 0 0 0 1px var(--dim); }
+  .recstate.bad { color: var(--alert); border-color: var(--alert); }
+  .recstate.bad .dot { background: var(--alert); }
+  @keyframes rec-blink { 50% { opacity: .15; } }
+  /* Somebody who has asked for less motion still gets the fill and the dot;
+     only the blink goes. */
+  @media (prefers-reduced-motion: reduce) {
+    .recstate.on .dot { animation: none; }
+  }
+
+  /* The header's placement is the one somebody checks on the way past, so it
+     is a size up on the pills beside it rather than one of a row of equals. */
+  #rec { font-size: 14px; padding: 3px 12px; }
+  /* **The id gives up the width the badge takes**, rather than the header
+     wrapping to a third row on the one screen that must not be scrolled. It is
+     the only thing up there that can be cut and still be useful — a truncated
+     robot id is recognisable, and the Rig tab carries it in full. */
+  #robot { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* On the narrowest handsets the badge's width has to come from somewhere,
+     and the app's name is the one thing up there nobody needs: the browser tab
+     says it, and the row it shares is answering which headset this is and
+     whether it is running. The gate keeps its heading — that is the first
+     screen a new phone sees, and the only place the name is news. */
+  @media (max-width: 420px) { header h1 { display: none; } }
+
+  /* 44px minimum: these get pressed with a thumb, sometimes with a glove on. */
+  button {
+    font: inherit; background: var(--card); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 16px; min-height: 44px; cursor: pointer;
+  }
+  button:active { border-color: var(--accent); }
+  button.quiet {
+    background: none; border: 0; color: var(--dim);
+    font-size: 13px; padding: 10px 0; text-decoration: underline;
+  }
+  /* Rows wrap instead of overflowing. A phone-width table with a nowrap right
+     column pushes the page sideways, and a horizontally scrolling status page
+     is unreadable one-handed. */
+  .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8px 14px; flex-wrap: wrap; padding: 8px 0;
+    border-top: 1px solid var(--line);
+  }
+  .row:first-child { border-top: 0; }
+  .row > .v { color: var(--dim); text-align: right; margin-left: auto; }
+  /* A sub-heading inside a block of rows. The rig's health is three registers
+     — what the lenses see, what the hands are doing, and what runs out — and
+     eleven undifferentiated rows read as a list rather than as three answers. */
+  .grp {
+    color: var(--dim); font-size: 12px; letter-spacing: .08em;
+    text-transform: uppercase; padding: 12px 0 2px; border-top: 1px solid var(--line);
+  }
+  .grp:first-child { border-top: 0; padding-top: 0; }
+
+  /* The tab bar, on the header's second row so it is reachable from anywhere
+     without a scroll. Three equal targets across the width: this gets pressed
+     with a thumb on a phone that may be strapped to the other arm. */
+  .tabs { display: flex; gap: 6px; width: 100%; }
+  .tabs button {
+    flex: 1; min-height: 40px; padding: 8px 4px;
+    background: none; color: var(--dim); border-color: transparent;
+  }
+  .tabs button[aria-selected="true"] {
+    color: var(--fg); border-color: var(--line); background: var(--card);
+  }
+
+  #task-name { color: var(--dim); font-size: 13px; }
+  #task-name:empty { display: none; }
+
+  /* The hold, per side. The sweep captures itself once both grippers are
+     still, so the operator's question is "is it counting me yet" — which is a
+     bar filling, not a number. */
+  .hold { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; padding: 6px 0; }
+  .hold .bar { height: 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+  .hold .bar > i { display: block; height: 100%; background: var(--accent); width: 0; }
+  .prompt { font-size: 20px; line-height: 1.3; padding: 4px 0 10px; }
+
+  ul { margin: 0; padding-left: 20px; }
+  li { padding: 3px 0; }
+
+  /* The viewer takes the whole window under the header: its sidebar and
+     three cameras want every pixel, and it scrolls inside itself. */
+  body[data-view="viewer"] #app { display: flex; flex-direction: column; height: 100dvh; }
+  body[data-view="viewer"] main {
+    flex: 1; min-height: 0; max-width: none; margin: 0; padding: 0; display: block;
+  }
+  #v-viewer { height: 100%; grid-template-rows: 100%; }
+  #viewer { display: block; width: 100%; height: 100%; border: 0; }
+
+  /* Setup's forms read stretched past 900 px. Rig's
+     left column is 2/5 of the page, and only at 1200 px is it wide enough
+     for a readiness reason or a calibration row on one line. */
+  body { --page: 900px; }
+  body[data-view="rig"] { --page: 1200px; }
+  @media (min-width: 720px) {
+    main { max-width: var(--page); padding: 16px; margin: 0 auto; }
+    /* The bar's contents sit over Rig's column on every view, so the tabs do
+       not jump when Setup narrows the page under them. */
+    header {
+      padding-left: max(16px, env(safe-area-inset-left), calc((100% - 1200px) / 2 + 16px));
+      padding-right: max(16px, env(safe-area-inset-right), calc((100% - 1200px) / 2 + 16px));
+    }
+  }
+
+  /* **Rig fits a laptop window without a scroll** (~700 px tall at 1280x800).
+     It is the tab left open beside the rig, and a fault in a row below the fold
+     is a fault nobody sees. Readings on the right, because the disk row needs
+     ~440 px before it wraps. */
+  @media (min-width: 900px) {
+    #v-rig { grid-template-columns: 2fr 3fr; align-items: start; }
+    #v-rig > .col { display: grid; gap: 14px; }
+    #sec-calib, #sec-device { order: 0; }
+    .row { padding: 4px 0; }
+    /* With a mouse the tabs need no thumb-width targets, so they share the
+       title's row and give back its height. */
+    .tabs { width: auto; }
+    .tabs button { flex: none; padding: 6px 18px; }
+  }
+
+  /* --- landscape on a phone -----------------------------------------------
+     ~390 px of height, most of it spent before any content: the header is two
+     rows and every section carries 12 px of padding twice. Nothing here
+     changes what is shown, only what it costs vertically. */
+  @media (orientation: landscape) and (max-height: 560px) {
+    h1 { display: none; }            /* the tab bar already says where you are */
+    header { padding-top: 6px; padding-bottom: 6px; gap: 6px; }
+    .tabs button { min-height: 36px; padding: 6px 4px; }
+    main { padding-top: 10px; padding-bottom: 10px; }
+    section { padding: 8px 12px; }
+    .row { padding: 5px 0; }
+  }
+
+  button.danger:active { border-color: var(--alert); color: var(--alert); }
+  #reset button { color: var(--alert); }
+  input, select, textarea {
+    font: inherit; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; min-height: 44px; width: 100%;
+  }
+  /* The native arrow ignores padding and sits against the border, and its
+     popup list is light on a dark page. */
+  select {
+    appearance: none; -webkit-appearance: none; color-scheme: dark;
+    padding-right: 40px;
+    background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2398a0ae' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center;
+    text-overflow: ellipsis;
+  }
+  textarea { min-height: 96px; resize: vertical; }
+  /* Stacked, not two columns: a label beside a 44px input on a 390px screen
+     leaves the input too narrow to read a backend URL in. */
+  .field { display: block; padding: 8px 0; }
+  .field[hidden] { display: none; }
+  .field > span { display: block; color: var(--dim); font-size: 13px; padding-bottom: 4px; }
+  /* A list of choices, one per row, each a full-width hit target. */
+  .pick { display: grid; gap: 8px; }
+  .pick button {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 10px; text-align: left; width: 100%;
+  }
+  .pick button.has-steps { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .pick button.has-steps .dim { font-size: 13px; }
+  .pick button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  /* One card per task: the name, then its numbered steps. */
+  .tasks { display: grid; gap: 10px; }
+  .task-edit { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 8px; }
+  .task-edit .line { display: flex; gap: 8px; align-items: center; }
+  .task-edit .line input { flex: 1; min-width: 0; }
+  .task-edit .line .num { color: var(--dim); min-width: 2ch; text-align: right; }
+  .task-edit .steps { display: grid; gap: 6px; padding-left: 12px; }
+  .task-edit .steps:empty { display: none; }
+  .task-edit .step { display: grid; gap: 4px; }
+  .switch { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; padding: 4px 0 10px; color: var(--dim); }
+  .switch:empty { display: none; }
+  .switch label { display: flex; align-items: center; gap: 6px; }
+  .switch input { width: auto; min-height: 0; }
+  .task-edit button.say { padding: 8px 12px; color: var(--accent); }
+  .task-edit button.say:disabled { color: var(--dim); opacity: .5; cursor: default; }
+  .task-edit button.say.failed { color: var(--alert); }
+  .task-edit button.say.busy { animation: busy 1s ease-in-out infinite; opacity: 1; }
+  @keyframes busy { 50% { opacity: .25; } }
+  .task-edit .name { font-weight: bold; }
+  .task-edit button.x { padding: 10px 12px; color: var(--dim); }
+  .task-edit button.add-step { justify-self: start; margin-left: 12px; }
+  .ep { padding: 10px 0; border-top: 1px solid var(--line); }
+  .ep:first-child { border-top: 0; }
+  .ep .actions { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .ep a { color: var(--dim); }
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  footer { padding: 4px 14px 28px; text-align: center; }
+  pre {
+    margin: 0; padding: 10px 12px; font: inherit; font-size: 13px;
+    white-space: pre-wrap; word-break: break-all; user-select: all;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <!-- **Three views, not one long page**, so the thing an operator needs —
+       may I start, and if not, why — is at the top of `Rig`, then every rate
+       and the sweep's own prompt. The step being collected is spoken on the
+       headset, so nothing here is sized to be read mid-take. -->
+  <header>
+    <h1>YUBI Go Console</h1>
+    <span class="pill recstate off" id="rec"><i class="dot"></i><span class="t">—</span></span>
+    <span class="pill" id="batt" hidden>—</span>
+    <span class="dim" id="robot"></span>
+    <nav class="tabs" id="tabs">
+      <button data-view="rig" aria-selected="true">Rig</button>
+      <button data-view="setup" aria-selected="false">Setup</button>
+      <button data-view="viewer" aria-selected="false">Viewer</button>
+    </nav>
+  </header>
+  <main>
+
+    <!-- ============ RIG: may I start, and the diagnosis ================= -->
+    <div class="view" id="v-rig">
+      <!-- First: loud when it refuses and one quiet line when it does not — a
+           standing green block would train the eye to skip the place the red
+           arrives. -->
+      <div class="col">
+      <section id="sec-ready">
+        <h2>Readiness</h2>
+        <div id="ready"></div>
+      </section>
+      <section>
+        <h2>Task</h2>
+        <div id="task-name"></div>
+        <div id="task-step"></div>
+      </section>
+      <!-- The sweep the Y button starts, and the prompt it puts on the panel.
+           Started from the headset, read here: these are the instructions read
+           *while both hands are on the grippers*, which is exactly when the
+           headset panel is awkward to check. -->
+      <section id="sec-calib">
+        <h2>Calibration</h2>
+        <div id="calib"></div>
+      </section>
+      <section id="sec-device">
+        <h2>Backend</h2>
+        <div id="device"></div>
+      </section>
+      </div>
+      <div class="col">
+      <section>
+        <h2>Rig</h2>
+        <div id="rig"></div>
+      </section>
+      </div>
+    </div>
+
+    <!-- ============ SETUP: the typing ====================================
+         What only a keyboard can do, and the episodes. -->
+    <div class="view" id="v-setup" hidden>
+      <!-- In production only with "task choice: operator"; else the dashboard decides. -->
+      <section id="sec-taskpick">
+        <h2>Change task <span class="dim" id="taskcount"></span></h2>
+        <div class="pick" id="tasklist"></div>
+        <p class="dim" id="task-note"></p>
+      </section>
+      <section id="sec-tasks">
+        <h2>Tasks</h2>
+        <p class="dim">An episode walks the subtasks in order: double-click to move to the next one. With no subtasks, an episode is one step.</p>
+        <div id="f-tasks" class="tasks"></div>
+        <div class="actions" style="padding-top:10px">
+          <button type="button" id="add-task">+ Add task</button>
+          <button id="save-tasks">Save tasks</button> <span id="saved-tasks" class="dim"></span>
+        </div>
+      </section>
+      <section>
+        <h2>Cameras</h2>
+        <div id="cameras"></div>
+        <p class="dim" id="cam-found"></p>
+        <p class="dim" id="cam-note"></p>
+      </section>
+      <section id="cfg">
+        <h2>Configure</h2>
+        <!-- Saved on change as well. -->
+        <label class="field"><span>video</span>
+          <select id="f-video">
+            <option value="h264">H.264 — about 5× smaller</option>
+            <option value="jpeg">JPEG images — for tools that cannot read H.264</option>
+          </select>
+        </label>
+        <!-- Saved on change as well. -->
+        <label class="field"><span>spoken step names</span>
+          <select id="f-announce">
+            <option value="true">on — say each subtask's name at its tone</option>
+            <option value="false">off — tones only</option>
+          </select>
+        </label>
+        <!-- Saved on change too: the folder the next episode is filed under. -->
+        <label class="field"><span>new episodes go to</span>
+          <input id="f-folder" placeholder="(top level)" autocomplete="off"></label>
+        <label class="field"><span>mode</span>
+          <select id="f-mode">
+            <option value="standalone">standalone</option>
+            <option value="production">production</option>
+          </select>
+        </label>
+        <!-- Production only: a standalone rig never reads them. -->
+        <label class="field" id="backend-url"><span>backend URL</span>
+          <input id="f-base_url" inputmode="url" autocomplete="off" placeholder="http://backend.example:8000/api"></label>
+        <label class="field" id="backend-key"><span>API key</span>
+          <input id="f-api_key" type="password" autocomplete="off"></label>
+        <!-- Production only, and saved on change. -->
+        <label class="field" id="backend-operator"><span>operator login</span>
+          <select id="f-require-operator">
+            <option value="true">required — open this robot's dashboard teleop screen</option>
+            <option value="false">not required</option>
+          </select>
+        </label>
+        <!-- Production only, and saved on change. -->
+        <label class="field" id="backend-pick"><span>task choice</span>
+          <select id="f-pick-task">
+            <option value="false">dashboard — record the head of the queue</option>
+            <option value="true">operator — pick any queued task on this page</option>
+          </select>
+        </label>
+        <div class="actions" style="padding-top:6px">
+          <button id="save">Save</button> <span id="saved" class="dim"></span>
+        </div>
+      </section>
+      <section id="meta">
+        <h2>Metadata</h2>
+        <p class="dim" id="meta-note">Written into each episode's meta.json, and into the bucket path when uploads are on. All optional.</p>
+        <p class="dim" id="meta-note-prod" hidden>From the backend. Edit them on the dashboard.</p>
+        <label class="field"><span>organization</span><input id="f-organization" placeholder="optional"></label>
+        <label class="field"><span>site</span><input id="f-site" placeholder="optional"></label>
+        <label class="field"><span>location</span><input id="f-location" placeholder="optional"></label>
+        <label class="field"><span>robot type</span><input id="f-robot_type" placeholder="optional"></label>
+        <label class="field"><span>robot id</span><input id="f-robot_id" placeholder="optional"></label>
+        <label class="field"><span>operator</span><input id="f-operator" placeholder="optional"></label>
+        <div class="actions" style="padding-top:6px">
+          <button id="meta-save">Save</button> <span id="meta-saved" class="dim"></span>
+        </div>
+      </section>
+      <!-- Written to storage.yaml. The uploader reads it again on its next
+           check, at most 15 s later (`record::upload::worker::IDLE_POLL`), so the
+           line under the form follows. -->
+      <section id="up">
+        <h2>Uploads</h2>
+        <p class="dim">Finished episodes are sent to an S3-compatible bucket between recordings. Without a bucket they stay on the headset.</p>
+        <label class="field"><span>endpoint</span>
+          <input id="u-endpoint" inputmode="url" autocomplete="off" placeholder="http://192.168.1.10:9000"></label>
+        <label class="field"><span>bucket</span><input id="u-bucket" autocomplete="off"></label>
+        <label class="field"><span>prefix</span><input id="u-prefix" autocomplete="off" placeholder="yubi-go"></label>
+        <label class="field"><span>region</span><input id="u-region" autocomplete="off" placeholder="us-east-1"></label>
+        <label class="field"><span>access key</span>
+          <input id="u-access_key" type="password" autocomplete="off"></label>
+        <label class="field"><span>secret key</span>
+          <input id="u-secret_key" type="password" autocomplete="off"></label>
+        <label class="field"><span>after upload</span>
+          <select id="u-delete">
+            <option value="false">keep it for local_retention_hours (24 h by default)</option>
+            <option value="true">delete it from the headset once it is sent</option>
+          </select>
+        </label>
+        <p id="u-status" class="dim" style="overflow-wrap:anywhere"></p>
+        <div class="actions" style="padding-top:6px">
+          <button id="u-save">Save</button> <button id="u-off" class="quiet">Turn off</button>
+          <span id="u-saved" class="dim"></span>
+        </div>
+      </section>
+      <section id="reset">
+        <h2>Reset</h2>
+        <p class="dim">Reset configuration puts the settings, the upload target, the calibrations and the camera ports back to factory defaults. The episodes stay.</p>
+        <p class="dim">Delete data removes every episode and LeRobot export on the headset.</p>
+        <div class="actions">
+          <button id="reset-config">Reset configuration</button>
+          <button id="delete-data">Delete data</button>
+        </div>
+        <p><span id="reset-saved" class="dim"></span></p>
+      </section>
+      <section id="licenses">
+        <h2>Licenses</h2>
+        <p class="dim">YUBI Go is licensed under Apache-2.0. <a href="/licenses" target="_blank">Show licenses</a></p>
+      </section>
+    </div>
+
+    <!-- ============ VIEWER: what the headset sees and what it recorded ===
+         `/viewer`, framed under the header. It is loaded only while this tab
+         is open, because its live view streams the cameras and an iframe
+         hidden by a tab still counts as visible to it. -->
+    <div class="view" id="v-viewer" hidden>
+      <iframe id="viewer" title="Viewer"></iframe>
+    </div>
+
+  </main>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const text = (el, s) => { if (el.textContent !== s) el.textContent = s; };
+
+// `fill("{n} on disk", {n: 3})`.
+function fill(template, vars) {
+  return template.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    // The device's own sentence: its refusals name the fix.
+    const why = await res.json().catch(() => null);
+    throw new Error((why && why.error) || res.status + " " + path);
+  }
+  return res;
+}
+
+// Every control that changes the device goes through here: post it, say what
+// the device said if it refused, and re-poll at once so the screen shows what
+// landed.
+async function post(path, body, where) {
+  try {
+    await api(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (where) { where.className = "dim"; text(where, ""); }
+    await tick();
+    return true;
+  } catch (e) {
+    if (where) { where.className = "bad"; text(where, e.message); }
+    return false;
+  }
+}
+
+// Which of the three views is showing. **`rig` on a fresh session, always**:
+// a phone picked up off a bench must open on what is true rather than
+// wherever it was left.
+//
+// sessionStorage, not local: it survives the reload a flaky rig wifi causes
+// mid-setup, so the page does not bounce somebody out of the camera picker
+// they were halfway through, and it does not survive the next session.
+//
+// A link overrides both: the address names the view and, in the viewer, what
+// it shows (`#rig`, `#setup`, `#viewer/live`, `#viewer/<episode>`).
+const VIEW_KEY = "yubi-go-view";
+const VIEWS = ["rig", "setup", "viewer"];
+
+function linked() {
+  const [v, ...pick] = decodeURIComponent(location.hash.slice(1)).split("/");
+  return VIEWS.includes(v) ? { view: v, pick: pick.join("/") } : null;
+}
+
+const link = linked();
+let view = link ? link.view : VIEWS.includes(sessionStorage.getItem(VIEW_KEY) || "")
+  ? sessionStorage.getItem(VIEW_KEY) : "rig";
+
+// The last state polled, so switching views repaints immediately instead of
+// showing the previous view's leftovers until the next tick.
+let lastState = null;
+let viewerHash = link && link.pick ? "#" + link.pick : "";
+
+function setView(name) {
+  view = name;
+  document.body.dataset.view = name;
+  for (const v of VIEWS) $("v-" + v).hidden = v !== name;
+  for (const b of $("tabs").children) {
+    b.setAttribute("aria-selected", b.dataset.view === name ? "true" : "false");
+  }
+  // The viewer keeps the take it shows in its hash, so leaving and coming
+  // back reopens the same one.
+  const frame = $("viewer");
+  if (name === "viewer") {
+    if (!frame.src.includes("/viewer")) frame.src = "/viewer" + viewerHash;
+  } else if (frame.src.includes("/viewer")) {
+    viewerHash = frame.contentWindow.location.hash;
+    frame.src = "about:blank";
+  }
+  history.replaceState(null, "", "#" + name + (name === "viewer" && viewerHash ? "/" + viewerHash.slice(1) : ""));
+  try { sessionStorage.setItem(VIEW_KEY, name); } catch (e) { /* private mode */ }
+  if (lastState) render(lastState);
+  scrollTo(0, 0);
+}
+
+for (const b of $("tabs").children) b.onclick = () => setView(b.dataset.view);
+
+// A link pasted into this tab changes only the hash, so nothing reloads.
+addEventListener("hashchange", () => {
+  const l = linked();
+  if (!l) return;
+  if (l.pick) viewerHash = "#" + l.pick;
+  if (l.view === "viewer" && view === "viewer") $("viewer").contentWindow.location.hash = viewerHash;
+  else setView(l.view);
+});
+
+
+// The poll, so it can be stopped on a page that is being torn down. A dropped
+// request is ordinary on rig wifi; a run of them is what the header says.
+let polling = null;
+
+function poll() {
+  if (polling === null) polling = setInterval(tick, 500);
+}
+
+// --- shared formatting -----------------------------------------------------
+//
+// The words come off the device wherever the device has an opinion — readiness
+// reasons and the upload verdict are rendered verbatim, because two surfaces
+// paraphrasing one fault is how an operator debugs the wrong thing. What is
+// formatted here is only what is a plain number on the wire.
+
+// Decimal gigabytes, which is what a disk is sold and read in. One decimal
+// under 10 GB, because that is where the difference between 4 GB and 400 MB is
+// the difference between another take and none. Same rule as `panel::ui::gb`.
+function gb(n) {
+  const v = n / 1e9;
+  return (v < 10 ? v.toFixed(1) : v.toFixed(0)) + " GB";
+}
+
+// A duration at a glance, as `panel::ui::span` writes it.
+function span(secs) {
+  const mins = Math.floor(secs / 60), h = Math.floor(mins / 60), m = mins % 60;
+  if (mins === 0) return "<1m";
+  if (h === 0) return fill("{m}m", { m });
+  if (h < 10) return fill("{h}h{mm}m", { h, mm: String(m).padStart(2, "0") });
+  return fill("{h}h", { h: Math.min(h, 99) });
+}
+
+// A source's rate and the verdict on it: nominal alongside the measurement,
+// because actual alone has no yardstick.
+//
+// **Amber-free.** Either it is producing at the rate we
+// expect or the operator needs to know before collecting — and the test is the
+// gate's own, so a row drawn red beside a start that was allowed can never
+// teach anyone to ignore the red.
+function rate(src) {
+  let v = (src.nominal ? src.hz.toFixed(1) + "/" + src.nominal.toFixed(0) : src.hz.toFixed(1)) + " Hz";
+  // A pose the runtime is extrapolating arrives on time and at full rate, so
+  // the number alone cannot show it.
+  if (src.live && src.extrapolated) v += " untracked";
+  const ok = src.live && !src.starved && !src.extrapolated;
+  return [v, ok ? "ok" : "bad"];
+}
+
+// One row: a label on the left and coloured runs on the right, which is the
+// band's shape — the numbers stay dim and only the verdict is coloured, so the
+// eye lands on the one word that matters.
+function row(label, runs) {
+  const el = document.createElement("div");
+  el.className = "row";
+  const a = document.createElement("span");
+  a.textContent = label;
+  const b = document.createElement("span");
+  b.className = "v";
+  for (const [words, cls] of runs) {
+    // Not `s`: every renderer below binds that name to the device's state, and
+    // `the_page_reads_no_field_state_does_not_serve` finds those fields by
+    // looking for `s.<name>` — a local `s` here is a phantom field for it.
+    const run = document.createElement("span");
+    run.textContent = words;
+    if (cls) run.className = cls;
+    b.append(run);
+  }
+  el.append(a, b);
+  return el;
+}
+
+function group(title) {
+  const el = document.createElement("div");
+  el.className = "grp";
+  el.textContent = title;
+  return el;
+}
+
+// --- readiness -------------------------------------------------------------
+
+function renderReady(s) {
+  const el = $("ready");
+  // Off by default, and worth a line only when it is on: a session collecting
+  // its faulted episodes deliberately is a session whose meta.json means
+  // something different, and nothing else on the page says so.
+  const faulted = s.keep_faulted_episodes
+    ? [row("faulted episodes", [["kept, not discarded", "warn"]])] : [];
+  if (s.ready) {
+    el.replaceChildren(Object.assign(document.createElement("span"),
+      { className: "ok", textContent: "ready to record" }), ...faulted);
+    return;
+  }
+  // The same words the panel uses. Two surfaces paraphrasing one fault is how
+  // an operator ends up debugging the wrong thing. `reasons_shown` is that
+  // list as the panel shortens it.
+  const ul = document.createElement("ul");
+  for (const r of s.reasons_shown || s.reasons) {
+    const li = document.createElement("li");
+    li.className = "bad";
+    li.textContent = r;
+    ul.append(li);
+  }
+  el.replaceChildren(ul, ...faulted);
+}
+
+// --- the task, and what the hands do next ----------------------------------
+
+function renderTask(s) {
+  // **The main row is whatever the hands are supposed to do next**, and there
+  // is always one — an instruction, or the task itself, or the fact that there
+  // is no task.
+  //
+  // The small row above it carries the task name **only when the main row is a
+  // subtask**. With no subtasks the task IS the thing being done, so it takes
+  // the main row rather than being repeated in two sizes. The same rule the
+  // band applies: this is picked once, that is what changes.
+  let big, small = "", cls = "";
+  if (!s.task) {
+    // Not a task name, so it is not dimmed like one. Tasks are set on the
+    // Setup tab, or by the dashboard's queue in production; this row only says
+    // that there is none.
+    big = "no task assigned";
+    cls = "bad";
+  } else if (s.task_completed) {
+    // Not a stop and not an error: `repeat-last` asks for another the moment a
+    // take ends, so this is said in the calm colour, not the alarming one.
+    big = "collected — record another";
+    small = s.task;
+    cls = "dim";
+  } else if (s.step) {
+    // Already numbered by the device (`View::step_line`), in the band's own
+    // words, so the two surfaces cannot paraphrase each other.
+    big = s.step;
+    small = s.task;
+  } else {
+    big = s.task;
+  }
+  text($("task-step"), big);
+  $("task-step").className = "step " + cls;
+  text($("task-name"), small);
+}
+
+// --- the rig ---------------------------------------------------------------
+
+// **These mirror `hub::SRC_*` and shift whenever a source is added or
+// removed.** Nothing on the wire is keyed by name: `/state` sends `sources` as
+// a bare array, so a stale index here draws the wrong rate under the right
+// label.
+const SRC_ENCODER = [3, 4], SRC_CONTROLLER = [5, 6], SRC_HMD = 7;
+
+// Every reading the band carries, grouped by the hardware that produces it,
+// head before the wrists.
+function renderRig(s) {
+  const host = $("rig");
+  const out = [group("cameras")];
+  // Every camera the rig has: the one on top of the headset
+  // (`hub::SLOT_HEAD`), then the two wrists.
+  for (const i of [2, 0, 1]) {
+    const src = s.sources[i];
+    if (i === 2 && !s.head_camera) {
+      out.push(row(src.name, [["not used", "idle"]]));
+      continue;
+    }
+    const runs = [rate(src)];
+    if (src.width) runs.push(["  " + src.width + "x" + src.height, "idle"]);
+    if (src.bytes_mb_s) runs.push(["  " + src.bytes_mb_s.toFixed(1) + " MB/s", "idle"]);
+    out.push(row(src.name, runs));
+  }
+
+  // `encoders`, not `grippers`: the number is the encoder's alone, so a jaw
+  // jammed shut with a healthy encoder reads 98.2 under it.
+  out.push(group("encoders"));
+  for (const side of [0, 1]) {
+    out.push(row((side === 0 ? "left" : "right"), [rate(s.sources[SRC_ENCODER[side]])]));
+  }
+
+  out.push(group("quest"));
+  out.push(row("headset", [rate(s.sources[SRC_HMD])]));
+  for (const side of [0, 1]) {
+    out.push(row((side === 0 ? "left controller" : "right controller"),
+      [rate(s.sources[SRC_CONTROLLER[side]])]));
+  }
+
+  out.push(group("what runs out"));
+  // Never a stand-in percentage on a device that will not answer: a headset
+  // whose BatteryManager is silent is still recording perfectly, and the
+  // operator can read the charge off the system menu. A gap, not a fault.
+  if (!s.battery) {
+    out.push(row("battery", [["unknown", "idle"]]));
+  } else {
+    // The level decides the colour even while charging: with the rig on the
+    // Quest's one USB-C port a charging headset is one nobody is collecting
+    // with, so "it is going up" does not make 8% fine.
+    const cls = s.battery.pct <= 10 ? "bad" : s.battery.pct <= 20 ? "warn" : "ok";
+    const runs = [[s.battery.pct + "%" + (s.battery.charging ? " " + "charging" : ""), cls]];
+    // **The words come off the trend, not off `charging`.** A headset on a
+    // cable that cannot keep up reads `68% charging  5h30m left`, which looks
+    // contradictory and is exactly right.
+    if (s.battery.eta_sec !== null && s.battery.eta_to !== "unknown") {
+      runs.push(["  " + fill(s.battery.eta_to === "full" ? "{t} to full" : "{t} left", { t: span(s.battery.eta_sec) }), cls]);
+    }
+    out.push(row("battery", runs));
+  }
+  if (!s.disk) {
+    out.push(row("disk", [["unknown", "idle"]]));
+  } else {
+    // Free is the number that decides anything and used is the one that says
+    // whether uploading would help, so only free is coloured.
+    const left = s.disk.recording_sec;
+    // `null` means the floor is reached and the gate is already refusing
+    // starts — said in the same words the refusal is, in its colour.
+    const cls = left === null ? "bad" : left < 600 ? "warn" : "ok";
+    out.push(row("disk", [
+      [fill("{gb} free", { gb: gb(s.disk.free) }), cls],
+      [fill(", {gb} used", { gb: gb(s.disk.used) }), "idle"],
+    ]));
+    out.push(row("recording", [
+      [left === null ? "no room to record" : fill("{t} left", { t: span(left) }), cls],
+      [fill(", {t} recorded", { t: span(s.recorded_sec) }), "idle"],
+    ]));
+  }
+  out.push(row("episodes", [
+    [fill("{n} on disk", { n: s.episode_count }), "idle"],
+    // Drawn only when there are some: standalone never has any and a
+    // production headset keeping up sits at zero, so a standing `0 queued`
+    // would spend the row saying nothing.
+    [s.queued ? "  " + fill("{n} queued", { n: s.queued }) : "", "idle"],
+  ]));
+  out.push(row("upload", [[s.upload.text, s.upload.level]]));
+  out.push(addressRow(s.mdns_host));
+  host.replaceChildren(...out);
+}
+
+// Only the browser can tell whether *this* computer resolves the `.local`
+// name: a network that blocks multicast answers the headset's own queries
+// fine. Never red, because a name nobody can resolve refuses nothing.
+const nameReach = {};
+
+function addressRow(name) {
+  const here = location.hostname;
+  const ip = here === name ? "" : here;
+  if (!name) return row("address", [[ip, "idle"], ["  " + "no name yet", "idle"]]);
+  if (here !== name && !(name in nameReach)) {
+    nameReach[name] = null;
+    // `no-cors`: any answer at all, even an opaque one, means the name resolved.
+    fetch("http://" + name + ":8080/favicon.ico", { mode: "no-cors", signal: AbortSignal.timeout(2000) })
+      .then(() => { nameReach[name] = true; }, () => { nameReach[name] = false; });
+  }
+  const reach = here === name ? true : nameReach[name];
+  const el = row("address", [
+    ["", ""],
+    [ip ? "  " + ip : "", "idle"],
+    [reach === false ? "  " + "not reachable from this computer" : "", "idle"],
+  ]);
+  const link = Object.assign(document.createElement("a"), {
+    href: "http://" + name + ":8080/" + location.hash,
+    textContent: name + ":8080",
+    className: reach ? "ok" : "idle",
+  });
+  el.querySelector(".v").firstChild.replaceWith(link);
+  return el;
+}
+
+// Production only: standalone never asks the backend anything, and the rest
+// of the provisioning (mode, identity) is on the Setup tab.
+function renderDevice(s) {
+  $("sec-device").hidden = s.mode !== "production";
+  if (s.mode !== "production") return;
+  const runs = [s.backend_offline_min === null ? ["ok", "ok"]
+    // Warn, not alert: recording carries on when the backend goes away — it
+    // must — so this refuses nothing.
+    : [s.backend_offline_min ? fill("offline {n} min", { n: s.backend_offline_min }) : "offline", "warn"]];
+  // The one thing a production headset can lose silently: every take from
+  // then on is honest but unattached.
+  if (s.unbound) {
+    runs.push(["  " + fill(s.unbound === 1 ? "{n} episode unbound" : "{n} episodes unbound", { n: s.unbound }), "warn"]);
+  }
+  $("device").replaceChildren(row("backend", runs));
+}
+
+// --- calibration -----------------------------------------------------------
+
+// Rebuilt only when the sweep's shape changes; the hold bars are moved every
+// poll without touching the DOM around them, so the two numbers that are the
+// whole feedback of the gesture cost nothing per tick.
+let calibSig = "";
+
+function renderCalibration(s) {
+  const c = s.calibration;
+  const sig = JSON.stringify([c.prompt, c.message, c.sides]);
+  if (sig !== calibSig) {
+    calibSig = sig;
+    const out = [];
+    if (c.prompt) {
+      // The words the panel shows, verbatim — both ends are named explicitly
+      // because "let go" is what the hand does but "open fully" is what the
+      // calibration needs, and a gripper released gently misses its stop.
+      out.push(Object.assign(document.createElement("div"),
+        { className: "prompt", textContent: c.prompt }));
+      // **Nothing here confirms a step.** Each captures itself once both
+      // grippers hold still, which is where the operator's hands already are.
+      for (const side of [0, 1]) {
+        const wrap = document.createElement("div");
+        wrap.className = "hold";
+        wrap.append(Object.assign(document.createElement("span"),
+          { className: "dim", textContent: (side === 0 ? "left" : "right") }));
+        const bar = document.createElement("div");
+        bar.className = "bar";
+        const fill = document.createElement("i");
+        fill.id = "hold" + side;
+        bar.append(fill);
+        wrap.append(bar);
+        out.push(wrap);
+      }
+    }
+    for (const line of c.message) {
+      out.push(Object.assign(document.createElement("p"),
+        { className: "bad", textContent: line }));
+    }
+    // Stored, per side. **`null` is not zero**: a gripper we do not have an
+    // angle for records an empty column rather than a plausible wrong one, so
+    // "not calibrated" is a state worth a row of its own.
+    for (const side of [0, 1]) {
+      const stored = c.sides[side];
+      out.push(row((side === 0 ? "left" : "right"), stored
+        ? [[fill("{deg}° travel", { deg: stored.envelope_deg.toFixed(1) }), "ok"],
+           // The panel cannot say this — the headset has no timezone, so it
+           // shows elapsed time and nothing else. A phone knows where it is.
+           // No year and no seconds, so the row fits the narrow column on one line.
+           ["  " + new Date(stored.captured_realtime_ns / 1e6).toLocaleString(undefined,
+             { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }), "idle"]]
+        : [["not calibrated", "bad"]]));
+    }
+    $("calib").replaceChildren(...out);
+  }
+  // The hold, every poll. Two numbers into two widths costs nothing and is the
+  // whole feedback the gesture has.
+  if (c.prompt) {
+    for (const side of [0, 1]) {
+      const el = $("hold" + side);
+      if (el) el.style.width = Math.round(c.held[side] * 100) + "%";
+    }
+  }
+}
+
+// --- task, cameras, episodes, configuration ----------------------------------
+
+let taskSig = "";
+
+// Stored by name, never by index, so a list re-declared on the Setup tab cannot
+// silently repoint a selection; the device refuses a name it does not offer.
+function renderTaskPicker(s) {
+  const sig = JSON.stringify([s.tasks, s.task, s.mode, s.operator_picks_task, s.queue]);
+  if (sig === taskSig) return;
+  taskSig = sig;
+  const prod = s.mode === "production";
+  $("sec-taskpick").hidden = prod && !s.operator_picks_task;
+  if (prod) return renderQueuePicker(s);
+  text($("taskcount"), s.tasks.length ? "(" + s.tasks.length + ")" : "");
+  if (!s.tasks.length) {
+    $("tasklist").replaceChildren();
+    text($("task-note"), "none declared — add them below");
+    return;
+  }
+  text($("task-note"), "");
+  $("tasklist").replaceChildren(...s.tasks.map((task) => {
+    const b = document.createElement("button");
+    b.setAttribute("aria-pressed", task.name === s.task ? "true" : "false");
+    b.textContent = task.name;
+    if (task.subtasks.length) {
+      const steps = document.createElement("div");
+      steps.className = "dim";
+      steps.textContent = task.subtasks.map((step, i) => i + 1 + ". " + step).join(" → ");
+      b.className = "has-steps";
+      b.append(steps);
+    }
+    b.onclick = () => post("/config", { selected_task: task.name }, $("task-note"));
+    return b;
+  }));
+}
+
+// The dashboard's queue, by task. Picking one records its oldest episode next.
+function renderQueuePicker(s) {
+  text($("taskcount"), s.queue.length ? "(" + s.queue.length + ")" : "");
+  text($("task-note"), s.queue.length ? "" : "nothing queued — assign episodes on the dashboard");
+  $("tasklist").replaceChildren(...s.queue.map((q) => {
+    const b = document.createElement("button");
+    b.setAttribute("aria-pressed", q.task === s.task ? "true" : "false");
+    b.textContent = q.task;
+    const left = document.createElement("div");
+    left.className = "dim";
+    left.textContent = fill("{n} episodes left", { n: q.left });
+    b.append(left);
+    b.onclick = () => post("/config", { selected_task: q.task }, $("task-note"));
+    return b;
+  }));
+}
+
+// `ranks[slot]` is the camera that slot reads (`camera_roles`). Posted
+// back whole, so the device validates the permutation. A swap, not an
+// assignment: two slots reading one camera records it twice under two names.
+function assign(ranks, slot, rank) {
+  const out = ranks.slice();
+  const other = ranks.indexOf(rank);
+  out[slot] = rank;
+  if (other >= 0 && other !== slot) out[other] = ranks[slot];
+  return out;
+}
+
+const SLOT_NAMES = ["left wrist", "right wrist", "head"];
+let camSig = "";
+
+function renderCameraSetup(s) {
+  const c = s.cameras;
+  const sig = JSON.stringify([c.ranks, s.head_camera]);
+  if (sig !== camSig) {
+    camSig = sig;
+    const out = [];
+    // Declared, never detected: an unplugged head camera that quietly stopped
+    // being expected is an episode with one camera's worth of nothing.
+    const shape = document.createElement("select");
+    shape.append(new Option("yes — a USB camera on the headset", "true"),
+                 new Option("no — two wrist cameras", "false"));
+    shape.value = s.head_camera ? "true" : "false";
+    shape.onchange = () => post("/config", { head_camera: shape.value === "true" }, $("cam-note"));
+    const shapeField = document.createElement("label");
+    shapeField.className = "field";
+    shapeField.append(Object.assign(document.createElement("span"),
+      { textContent: "camera on the headset" }), shape);
+    out.push(shapeField);
+    const slots = s.head_camera ? [2, 0, 1] : [0, 1];
+    for (const slot of slots) {
+      const sel = document.createElement("select");
+      for (let rank = 0; rank < c.ranks.length; rank++) {
+        // A position in the order the devices came in, not a label on them.
+        sel.append(new Option(fill("camera {n}", { n: rank + 1 }), String(rank)));
+      }
+      sel.value = String(c.ranks[slot]);
+      sel.onchange = () =>
+        post("/config", { camera_roles: assign(c.ranks, slot, Number(sel.value)) }, $("cam-note"));
+      const field = document.createElement("label");
+      field.className = "field";
+      field.append(Object.assign(document.createElement("span"),
+        { textContent: SLOT_NAMES[slot] }), sel);
+      out.push(field);
+    }
+    $("cameras").replaceChildren(...out);
+  }
+  // What is plugged in, beside the claim about it, on its own line so a
+  // refusal on `cam-note` is not wiped by the next poll.
+  const want = s.head_camera ? 3 : 2;
+  const found = $("cam-found");
+  found.className = c.found >= want ? "dim" : "bad";
+  text(found, fill(c.found === 1 ? "{n} USB camera found" : "{n} USB cameras found", { n: c.found }) +
+    (c.found >= want ? "" : fill(", {n} needed — a start will be refused", { n: want })));
+}
+
+const IDENTITY = ["organization", "site", "location", "robot_type", "robot_id", "operator"];
+
+// Refilled from the device every poll, except while someone is typing in it.
+let dirty = false;
+for (const el of document.querySelectorAll("#cfg input, #cfg select, #cfg textarea")) {
+  if (["f-video", "f-folder", "f-announce", "f-require-operator", "f-pick-task"].includes(el.id)) continue;
+  el.addEventListener("input", () => { dirty = true; text($("saved"), ""); });
+}
+
+$("f-video").onchange = () => post("/config", { video: $("f-video").value }, $("saved"));
+$("f-announce").onchange = () =>
+  post("/config", { announce_steps: $("f-announce").value === "true" }, $("saved"));
+$("f-require-operator").onchange = () =>
+  post("/config", { require_operator: $("f-require-operator").value === "true" }, $("saved"));
+$("f-pick-task").onchange = () =>
+  post("/config", { operator_picks_task: $("f-pick-task").value === "true" }, $("saved"));
+$("f-folder").onchange = () => post("/config", { folder: $("f-folder").value }, $("saved"));
+// Typed rather than clicked, because neither can be undone. The headset asks
+// for the same word.
+for (const [id, path, ask] of [
+  ["reset-config", "/reset/config", "Type delete to reset the configuration to factory defaults."],
+  ["delete-data", "/reset/data", "Type delete to remove every episode and export from the headset."],
+]) {
+  $(id).onclick = async () => {
+    const typed = prompt(ask);
+    if (typed === null) return;
+    if (typed.trim().toLowerCase() !== "delete") { text($("reset-saved"), "not deleted — the word was not delete"); return; }
+    if (await post(path, { confirm: "delete" }, $("reset-saved"))) text($("reset-saved"), "done");
+  };
+}
+
+function renderConfig(s) {
+  // Outside the `dirty` rule: it saves on change, so there is no draft to keep.
+  $("f-video").value = s.video;
+  $("f-announce").value = String(s.announce_steps !== false);
+  $("f-require-operator").value = String(s.require_operator !== false);
+  $("f-pick-task").value = String(s.operator_picks_task === true);
+  if (document.activeElement !== $("f-folder")) $("f-folder").value = s.folder || "";
+  if (!metaDirty) for (const f of IDENTITY) $("f-" + f).value = s.identity[f] || "";
+  if (dirty) return;
+  $("f-mode").value = s.mode;
+  showMode();
+  $("f-base_url").value = s.backend ? s.backend.base_url : "";
+  // Never filled in: /state does not carry it.
+  $("f-api_key").value = "";
+  $("f-api_key").placeholder =
+    (s.backend && s.backend.api_key_set ? "set — leave blank to keep it" : "not set");
+}
+
+// Follows the dropdown, not the saved mode, so picking production shows what
+// it changes before the save. Metadata locks because the backend's profile
+// replaces it on every load, so an edit would save and then never show.
+function showMode() {
+  const prod = $("f-mode").value === "production";
+  $("backend-url").hidden = !prod;
+  $("backend-key").hidden = !prod;
+  $("backend-operator").hidden = !prod;
+  $("backend-pick").hidden = !prod;
+  for (const f of IDENTITY) $("f-" + f).readOnly = prod;
+  $("meta-save").hidden = prod;
+  $("meta-note").hidden = prod;
+  $("meta-note-prod").hidden = !prod;
+}
+$("f-mode").addEventListener("change", showMode);
+
+$("save").onclick = async () => {
+  const backend = { base_url: $("f-base_url").value };
+  // An empty box keeps the key it cannot see; emptying the URL clears it.
+  if ($("f-api_key").value) backend.api_key = $("f-api_key").value;
+  const patch = { mode: $("f-mode").value, backend };
+  dirty = false;
+  if (await post("/config", patch, $("saved"))) {
+    $("saved").className = "ok";
+    text($("saved"), "saved — the next episode uses it");
+  } else {
+    dirty = true;
+  }
+};
+
+let metaDirty = false;
+for (const el of document.querySelectorAll("#meta input")) {
+  el.addEventListener("input", () => { metaDirty = true; text($("meta-saved"), ""); });
+}
+
+$("meta-save").onclick = async () => {
+  const identity = {};
+  for (const f of IDENTITY) identity[f] = $("f-" + f).value;
+  metaDirty = false;
+  if (await post("/config", { identity }, $("meta-saved"))) {
+    $("meta-saved").className = "ok";
+    text($("meta-saved"), "saved — the next episode uses it");
+  } else {
+    metaDirty = true;
+  }
+};
+
+// --- uploads ---------------------------------------------------------------
+
+const UPLOAD = ["endpoint", "bucket", "prefix", "region", "access_key", "secret_key"];
+let upDirty = false;
+for (const el of document.querySelectorAll("#up input, #up select")) {
+  el.addEventListener("input", () => { upDirty = true; text($("u-saved"), ""); });
+}
+
+function renderUpload(s) {
+  $("u-status").className = s.upload.level === "ok" ? "dim" : s.upload.level;
+  text($("u-status"), s.upload.text);
+  if (upDirty) return;
+  // `/state` never carries the keys, so those two always come back empty.
+  const u = s.storage || {};
+  for (const f of UPLOAD) $("u-" + f).value = u[f] || "";
+  $("u-delete").value = String(!!u.delete_after_upload);
+  for (const f of ["access_key", "secret_key"]) {
+    $("u-" + f).placeholder = (s.storage
+      ? "set — leave blank to keep it on the same host" : "not set");
+  }
+}
+
+async function saveUpload(body, said) {
+  upDirty = false;
+  if (await post("/storage", body, $("u-saved"))) {
+    $("u-saved").className = "ok";
+    text($("u-saved"), said);
+  } else {
+    upDirty = true;
+  }
+}
+
+$("u-save").onclick = () => {
+  const body = {
+    delete_after_upload: $("u-delete").value === "true",
+  };
+  for (const f of UPLOAD) body[f] = $("u-" + f).value;
+  saveUpload(body, "saved — checking the bucket…");
+};
+$("u-off").onclick = () => saveUpload({ off: true }, "uploads off — episodes stay on the headset");
+
+// --- the task editor -------------------------------------------------------
+
+// Refilled from the device like the form below, except while it has unsaved
+// edits.
+let tasksDirty = false;
+let tasksSig = "";
+
+function taskEdited() { tasksDirty = true; text($("saved-tasks"), ""); }
+$("f-tasks").addEventListener("input", (e) => { taskEdited(); if (e.target.say) sayState(e.target); });
+
+function removeButton(title, onclick) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "x";
+  b.title = title;
+  b.setAttribute("aria-label", title);
+  b.textContent = "✕";
+  b.onclick = () => { onclick(); taskEdited(); };
+  return b;
+}
+
+// Every name has a play button: what the headset will say for it, made on
+// the device after a save. It waits, spinning, while that is being made.
+function sayButton(input) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "say";
+  b.textContent = "▶";
+  b.onclick = () => {
+    const made = speechOf(input);
+    if (made && made.state === "ready") new Audio("/speech/" + made.id + ".wav").play();
+    if (made && made.state === "failed") {
+      $("saved-tasks").className = "bad";
+      text($("saved-tasks"), made.error);
+    }
+  };
+  input.say = b;
+  sayState(input);
+  return b;
+}
+
+function speechOf(input) {
+  return ((lastState && lastState.speech) || {})[input.value.trim()];
+}
+
+function sayState(input) {
+  const b = input.say, made = speechOf(input);
+  const state = !input.value.trim() ? "empty" : made ? made.state : "unsaved";
+  b.disabled = state !== "ready" && state !== "failed";
+  b.classList.toggle("busy", state === "pending");
+  b.classList.toggle("failed", state === "failed");
+  b.textContent = state === "failed" ? "!" : "▶";
+  b.style.visibility = state === "empty" ? "hidden" : "";
+  b.title = {
+    ready: "play", pending: "making the audio…", unsaved: "save to hear it",
+    failed: made && made.error, empty: "",
+  }[state];
+}
+
+function refreshSpeech() {
+  for (const input of $("f-tasks").querySelectorAll("input")) if (input.say) sayState(input);
+}
+
+// A name's line: its field, with whatever goes before and after it.
+function nameLine(name, placeholder, lead, tail) {
+  const input = document.createElement("input");
+  input.placeholder = placeholder;
+  input.value = name;
+  input.className = "en";
+  const line = document.createElement("div");
+  line.className = "line";
+  line.append(...lead(), input, sayButton(input), ...tail);
+  return [line, input];
+}
+
+function stepRow(steps, name) {
+  const row = document.createElement("div");
+  row.className = "step";
+  const num = () => { const n = document.createElement("span"); n.className = "num"; return [n]; };
+  const remove = removeButton("remove subtask", () => { row.remove(); numberSteps(steps); });
+  const [line, en] = nameLine(name, "subtask", num, [remove]);
+  // Enter starts the next step, so a list can be typed without the mouse.
+  en.onkeydown = (e) => {
+    if (e.key !== "Enter" || e.isComposing) return;
+    e.preventDefault();
+    const next = stepRow(steps, "");
+    row.after(next);
+    numberSteps(steps);
+    next.querySelector("input").focus();
+    taskEdited();
+  };
+  row.append(line);
+  return row;
+}
+
+function numberSteps(steps) {
+  [...steps.children].forEach((row, i) => text(row.querySelector(".num"), i + 1 + "."));
+}
+
+function taskCard(task) {
+  const card = document.createElement("div");
+  card.className = "task-edit";
+  const remove = removeButton("remove task", () => { card.remove(); emptyNote(); });
+  const [line, en] = nameLine(task.name, "task name", () => [], [remove]);
+  en.classList.add("name");
+  const steps = document.createElement("div");
+  steps.className = "steps";
+  steps.append(...task.subtasks.map((step) => stepRow(steps, step)));
+  numberSteps(steps);
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "quiet add-step";
+  add.textContent = "+ Add subtask";
+  add.onclick = () => {
+    const row = stepRow(steps, "");
+    steps.append(row);
+    numberSteps(steps);
+    row.querySelector("input").focus();
+    taskEdited();
+  };
+  // A pause to think also counts, so it is off unless the task needs it.
+  const still = document.createElement("label");
+  still.className = "switch";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = "still";
+  box.checked = !!task.advance_when_still;
+  still.append(box, "next subtask when both hands hold still for 1 s");
+  card.append(line, steps, add, still);
+  return card;
+}
+
+function emptyNote() {
+  if ($("f-tasks").querySelector(".task-edit")) return;
+  const p = document.createElement("p");
+  p.className = "dim";
+  p.textContent = "no tasks yet — add one";
+  $("f-tasks").replaceChildren(p);
+}
+
+$("add-task").onclick = () => {
+  $("f-tasks").querySelector("p")?.remove();
+  const card = taskCard({ name: "", subtasks: [] });
+  $("f-tasks").append(card);
+  card.querySelector("input").focus();
+  taskEdited();
+};
+
+function renderTaskEditor(s) {
+  $("sec-tasks").hidden = s.mode === "production";
+  const sig = JSON.stringify(s.tasks);
+  if (!tasksDirty && sig !== tasksSig) {
+    tasksSig = sig;
+    $("f-tasks").replaceChildren(...s.tasks.map(taskCard));
+    emptyNote();
+  }
+  refreshSpeech();
+}
+
+$("save-tasks").onclick = async () => {
+  const names = (el) => el.querySelector("input.en").value;
+  const tasks = [...$("f-tasks").querySelectorAll(".task-edit")].map((card) => ({
+    name: names(card),
+    subtasks: [...card.querySelectorAll(".steps .step")].map(names),
+    advance_when_still: card.querySelector("input.still").checked,
+  }));
+  // Still dirty while the request is out, so a poll cannot refill the cards
+  // under it; the poll after a save rebuilds them from what the device kept.
+  if (await post("/config", { tasks }, $("saved-tasks"))) {
+    tasksDirty = false;
+    $("saved-tasks").className = "ok";
+    text($("saved-tasks"), "saved — the next episode uses it");
+  }
+};
+
+// Every view, every poll. **The hidden one is painted too**, deliberately: it
+// is a section of a page that is already in the DOM, the work is tens of nodes,
+// and the alternative is a tab that shows the last view's numbers for up to
+// half a second after it is tapped. The one thing that is gated is the
+// episode viewer, because its live view is a network connection rather than a
+// node.
+function render(s) {
+  lastState = s;
+  renderReady(s);
+  renderTask(s);
+  renderTaskPicker(s);
+  renderTaskEditor(s);
+  renderRig(s);
+  renderDevice(s);
+  renderCameraSetup(s);
+  renderCalibration(s);
+  renderConfig(s);
+  renderUpload(s);
+}
+
+// --- the poll ---------------------------------------------------------------
+
+// Whether a take is running, written to every placement of the badge at once.
+// One fact, one sentence, however many corners of the page can show it — the
+// rule the band and the readiness list already follow.
+function recState(label, cls) {
+  for (const el of document.querySelectorAll(".recstate")) {
+    el.className = "pill recstate " + cls;
+    text(el.querySelector(".t"), label);
+  }
+}
+
+let failures = 0;
+async function tick() {
+  try {
+    const s = await (await api("/state")).json();
+    failures = 0;
+    // **A word for the failure, not the idle badge in red.** An `idle` pill
+    // coloured like a fault would say nothing is wrong and nothing is running
+    // about a headset that has just lost an episode.
+    recState(
+      s.write_failed ? "WRITE FAILED"
+        : s.recording ? fill("REC {t}s", { t: s.elapsed_sec.toFixed(1) })
+        : "IDLE",
+      s.write_failed ? "bad" : s.recording ? "on" : "off",
+    );
+    // In the header because it is the one reading somebody checks without
+    // having come to the page for anything: an armband answers "how long have
+    // I got" without a scroll.
+    $("batt").hidden = !s.battery;
+    if (s.battery) {
+      text($("batt"), s.battery.pct + "%" + (s.battery.charging ? " ⚡" : ""));
+      $("batt").className = "pill " +
+        (s.battery.pct <= 10 ? "bad" : s.battery.pct <= 20 ? "warn" : "");
+    }
+    // The `.local` name is what an operator recognises and types; the id is
+    // a UUID once the backend has named the robot.
+    text($("robot"), s.mdns_host || s.identity.robot_id);
+    document.title = s.identity.robot_id ? "YUBI Go [" + s.identity.robot_id + "]" : "YUBI Go";
+    render(s);
+  } catch (e) {
+    // A dropped poll is ordinary on rig wifi; only a run of them is news.
+    if (++failures > 5) recState("no response", "bad");
+  }
+}
+
+// A status page, not a game: a few Hz is plenty and it keeps the device's
+// radio quiet. The first poll is the first thing that happens.
+function boot() {
+  setView(view);
+  tick();
+  poll();
+}
+boot();
+</script>
+</body>
+</html>

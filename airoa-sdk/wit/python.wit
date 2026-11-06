@@ -1,0 +1,6 @@
+package airoa:core@0.1.0;
+
+world python {
+    include core;
+    import wasi:http/outgoing-handler@0.2.0;
+}

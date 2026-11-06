@@ -1,0 +1,18 @@
+# Python that goes into airoa-core.wasm beside upstream and our adapters,
+# and the tool that builds it. Read by `cargo build-cwasm`; locked in uv.lock.
+[project]
+name = "airoa-sdk-payload"
+version = "0"
+requires-python = ">=3.12"
+dependencies = [
+    "jsonschema==4.17.3",
+    "attrs==23.2.0",
+    "pyrsistent==0.20.0",
+    "PyYAML==6.0.2",
+]
+
+[dependency-groups]
+build = ["componentize-py==0.25.0"]
+
+[tool.uv]
+package = false

@@ -1,0 +1,19 @@
+[package]
+name = "reactive-svg"
+version = "0.1.0"
+edition = "2021"
+description = "Keyed SVG fragments rendered into one RGBA texture, redrawing only what changed"
+authors = ["AI Robot Association (AIRoA) <ext-oss@airoa.org>"]
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/airoa-org/yubi-go"
+
+[lib]
+name = "reactive_svg"
+
+[dependencies]
+# `default-features = false` drops system fonts (faces come from the caller),
+# raster-images (`<image>` decoding; pixels arrive through `image`), svgz and
+# memmap.
+resvg = { version = "0.48.1", default-features = false, features = ["text"] }
+log = "0.4"

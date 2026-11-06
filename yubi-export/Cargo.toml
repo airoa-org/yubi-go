@@ -1,0 +1,13 @@
+[package]
+name = "yubi-export"
+version = "0.1.0"
+edition = "2021"
+description = "The headset's LeRobot v2.1 export, run on a laptop over copied episodes"
+authors = ["AI Robot Association (AIRoA) <ext-oss@airoa.org>"]
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/airoa-org/yubi-go"
+
+[dependencies]
+yubi-go = { path = ".." }
+anyhow = "1.0.104"
