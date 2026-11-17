@@ -106,6 +106,18 @@ The `:8080` and `:9090` servers have no authentication, and by design any web pa
 network can read the live camera streams. YUBI Go is research software, not built for commercial
 deployment. Run the headset only on a network you trust. See [`SECURITY.md`](SECURITY.md).
 
+## Citation
+
+```bibtex
+@inproceedings{noguchi2026yubigo,
+ title={{YUBI} Go: Portable Robot Data Collection Anywhere with Bimanual Handheld Grippers},
+ author={Noguchi, Yuki and Kanai, Yuya and Ikeuchi, Kengo and Sugiura, Makoto and Okubo, Takuya and Khrapchenkov, Petr and Matsushima, Tatsuya and Ota, Kei and Ohkawa, Takehiko},
+ booktitle={Conference on Robot Learning Workshops, UMI Arena Device Track},
+ year={2026},
+ url={https://github.com/airoa-org/yubi-go}
+}
+```
+
 ## Contact
 
 Report bugs and request features in [GitHub issues](https://github.com/airoa-org/yubi-go/issues).
