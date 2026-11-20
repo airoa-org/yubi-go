@@ -110,7 +110,7 @@ deployment. Run the headset only on a network you trust. See [`SECURITY.md`](SEC
 
 ```bibtex
 @misc{noguchi2026yubigo,
- title={{YUBI} Go: Portable Robot Data Collection Anywhere with Bimanual Handheld Grippers},
+ title={{YUBI} Go: Robot Data Collection Anywhere with Bimanual Handheld Grippers},
  author={Noguchi, Yuki and Kanai, Yuya and Ikeuchi, Kengo and Sugiura, Makoto and Okubo, Takuya and Khrapchenkov, Petr and Matsushima, Tatsuya and Ota, Kei and Ohkawa, Takehiko},
  howpublished={Conference on Robot Learning Workshops, UMI Arena Device Track}, year={2026},
  url={https://github.com/airoa-org/yubi-go}
